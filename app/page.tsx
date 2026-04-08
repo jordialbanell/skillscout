@@ -376,7 +376,7 @@ ${'keySteps' in an ? an.keySteps.map((s: string, i: number) => `${i + 1}. ${s}`)
                   value={urlInput}
                   onChange={e => setUrlInput(e.target.value)}
                   onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !isBatch && (e.preventDefault(), handleScan())}
-                  placeholder={`instagram.com/reel/…\n\nFor batch: paste multiple URLs, one per line`}
+                  placeholder={`instagram.com/reel/…  ·  tiktok.com/@…  ·  docs.google.com/…\n\nFor batch: paste multiple URLs, one per line`}
                   className="url-input"
                   rows={isBatch ? Math.min(urlCount + 1, 6) : 1}
                 />
@@ -607,7 +607,7 @@ ${'keySteps' in an ? an.keySteps.map((s: string, i: number) => `${i + 1}. ${s}`)
       )}
 
       <style jsx>{`
-        .main { max-width: 680px; margin: 0 auto; padding: 0 28px 120px; }
+        .main { max-width: 680px; margin: 0 auto; padding: 0 24px 120px; }
 
         /* Nav */
         .nav { display: flex; align-items: center; justify-content: space-between; padding: 36px 0 20px; border-bottom: 1px solid var(--border); }
@@ -619,13 +619,13 @@ ${'keySteps' in an ? an.keySteps.map((s: string, i: number) => `${i + 1}. ${s}`)
         .count { background: var(--bg-3); border: 1px solid var(--border); border-radius: 100px; padding: 1px 6px; font-size: 10px; color: var(--text-muted); }
 
         /* Hero */
-        .hero { padding: 64px 0 48px; border-bottom: 1px solid var(--border); margin-bottom: 48px; }
-        .hero-title { font-family: var(--font-display); font-size: clamp(38px, 6vw, 58px); font-weight: 500; line-height: 1.1; letter-spacing: -1.2px; margin-bottom: 16px; }
+        .hero { padding: 28px 0 24px; border-bottom: 1px solid var(--border); margin-bottom: 24px; }
+        .hero-title { font-family: var(--font-display); font-size: clamp(26px, 5vw, 44px); font-weight: 500; line-height: 1.1; letter-spacing: -1px; margin-bottom: 8px; }
         .hero-title em { font-style: italic; color: var(--text-muted); }
-        .hero-sub { font-size: 15px; line-height: 1.7; color: var(--text-muted); max-width: 480px; font-weight: 300; }
+        .hero-sub { font-size: 13px; line-height: 1.6; color: var(--text-muted); max-width: 480px; font-weight: 300; }
 
         /* Input */
-        .input-section { margin-bottom: 48px; }
+        .input-section { margin-bottom: 28px; }
         .input-box { display: flex; align-items: stretch; border: 1px solid var(--border-dark); border-radius: 3px; background: var(--bg-2); transition: border-color 0.2s, box-shadow 0.2s; overflow: hidden; }
         .input-box:focus-within { border-color: var(--text); box-shadow: 0 0 0 3px rgba(26,25,21,0.06); }
         .input-box.batch { align-items: flex-start; }
@@ -745,10 +745,16 @@ ${'keySteps' in an ? an.keySteps.map((s: string, i: number) => `${i + 1}. ${s}`)
         .history-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 10px; }
         .history-repos { display: flex; flex-direction: column; gap: 5px; }
 
-        @media (max-width: 520px) {
+        @media (max-width: 640px) {
           .main { padding: 0 16px 80px; }
+          .nav { padding: 20px 0 16px; }
+          .hero { padding: 20px 0 20px; }
+          .hero-title { font-size: 28px; }
           .github-top { flex-direction: column; }
           .trust-badge { flex-direction: row; width: auto; padding: 6px 12px; gap: 8px; }
+          .url-input { font-size: 16px; } /* prevents iOS zoom */
+          .scan-btn { min-width: 64px; padding: 0 16px; font-size: 13px; }
+          .skill-name { font-size: 24px; }
         }
       `}</style>
     </main>

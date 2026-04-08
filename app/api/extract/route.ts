@@ -2,11 +2,12 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const APIFY_TOKEN = process.env.APIFY_API_TOKEN
 
-type SourceType = 'instagram' | 'tiktok' | 'article' | 'unknown'
+type SourceType = 'instagram' | 'tiktok' | 'article' | 'googledoc' | 'unknown'
 
 function detectSource(url: string): SourceType {
   if (url.includes('instagram.com')) return 'instagram'
   if (url.includes('tiktok.com') || url.includes('vm.tiktok.com')) return 'tiktok'
+  if (url.includes('docs.google.com/document')) return 'googledoc'
   if (url.startsWith('http')) return 'article'
   return 'unknown'
 }
@@ -26,7 +27,6 @@ async function pollApifyRun(runId: string, maxWait = 60000): Promise<boolean> {
 
 async function fetchInstagram(url: string) {
   if (!APIFY_TOKEN) throw new Error('APIFY_API_TOKEN not set')
-
   const runRes = await fetch(
     `https://api.apify.com/v2/acts/apify~instagram-reel-scraper/runs?token=${APIFY_TOKEN}`,
     {
@@ -39,15 +39,12 @@ async function fetchInstagram(url: string) {
   const runData = await runRes.json()
   const runId = runData?.data?.id
   if (!runId) throw new Error('No run ID returned')
-
   const succeeded = await pollApifyRun(runId)
   if (!succeeded) throw new Error('Apify run did not succeed in time')
-
   const datasetRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}`)
   const items = await datasetRes.json()
   const item = items?.[0]
   if (!item) throw new Error('No data returned from Apify')
-
   return {
     author: item.ownerUsername || 'Unknown',
     caption: item.caption || '',
@@ -58,17 +55,13 @@ async function fetchInstagram(url: string) {
 }
 
 async function fetchTikTok(url: string) {
-  // Step 1: oEmbed for metadata
   const oembedRes = await fetch(`https://www.tiktok.com/oembed?url=${encodeURIComponent(url)}`)
-  let author = 'Unknown'
-  let caption = ''
+  let author = 'Unknown', caption = ''
   if (oembedRes.ok) {
     const oembed = await oembedRes.json()
     author = oembed.author_name || 'Unknown'
     caption = oembed.title || ''
   }
-
-  // Step 2: Apify for audio/transcript
   let transcript: string | null = null
   if (APIFY_TOKEN) {
     try {
@@ -77,90 +70,106 @@ async function fetchTikTok(url: string) {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            postURLs: [url],
-            shouldDownloadVideos: false,
-            shouldDownloadCovers: false,
-            shouldDownloadSubtitles: true,
-            shouldDownloadSlideshowImages: false,
-          }),
+          body: JSON.stringify({ postURLs: [url], shouldDownloadVideos: false, shouldDownloadCovers: false, shouldDownloadSubtitles: true, shouldDownloadSlideshowImages: false }),
         }
       )
       if (runRes.ok) {
         const runData = await runRes.json()
         const runId = runData?.data?.id
-        if (runId) {
-          const succeeded = await pollApifyRun(runId)
-          if (succeeded) {
-            const datasetRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}`)
-            const items = await datasetRes.json()
-            const item = items?.[0]
-            // Try subtitles first, fall back to description
-            if (item?.subtitles?.length > 0) {
-              transcript = item.subtitles.map((s: { text: string }) => s.text).join(' ')
-            } else if (item?.text) {
-              transcript = item.text
-            }
-          }
+        if (runId && await pollApifyRun(runId)) {
+          const datasetRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}`)
+          const items = await datasetRes.json()
+          const item = items?.[0]
+          if (item?.subtitles?.length > 0) transcript = item.subtitles.map((s: { text: string }) => s.text).join(' ')
+          else if (item?.text) transcript = item.text
         }
       }
-    } catch (e) {
-      console.log('[tiktok apify error]', e)
+    } catch { /* ignore */ }
+  }
+  return { author, caption, transcript, thumbnail: null, source: 'tiktok' as SourceType }
+}
+
+async function fetchGoogleDoc(url: string) {
+  // Extract doc ID from various Google Docs URL formats
+  const idMatch = url.match(/\/d\/([a-zA-Z0-9_-]+)/)
+  if (!idMatch) throw new Error('Could not parse Google Doc ID')
+  const docId = idMatch[1]
+
+  // Try export as plain text first (works for public docs)
+  const exportUrl = `https://docs.google.com/document/d/${docId}/export?format=txt`
+  const res = await fetch(exportUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SkillScout/1.0)' },
+    redirect: 'follow',
+  })
+
+  if (res.ok) {
+    const text = await res.text()
+    if (text && text.length > 100) {
+      return {
+        author: 'Google Doc',
+        caption: 'Google Doc',
+        transcript: text.slice(0, 10000),
+        thumbnail: null,
+        source: 'article' as SourceType,
+      }
     }
   }
 
-  return {
-    author,
-    caption,
-    transcript,
-    thumbnail: null,
-    source: 'tiktok' as SourceType,
-  }
-}
-
-async function fetchArticle(url: string) {
-  // Fetch the article HTML and extract text
-  const res = await fetch(url, {
-    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SkillScout/1.0)' },
+  // Fallback: try mobilebasic HTML
+  const mobileUrl = `https://docs.google.com/document/d/${docId}/mobilebasic`
+  const mobileRes = await fetch(mobileUrl, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15' },
   })
-  if (!res.ok) throw new Error(`Could not fetch article: ${res.status}`)
-  const html = await res.text()
-
-  // Basic text extraction - strip tags, get meaningful content
+  if (!mobileRes.ok) throw new Error('Google Doc is not publicly accessible')
+  const html = await mobileRes.text()
   const text = html
     .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
     .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
     .replace(/<[^>]+>/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
-    .slice(0, 8000) // Limit to avoid overwhelming Claude
+    .slice(0, 10000)
 
-  // Try to extract title
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
-  const title = titleMatch ? titleMatch[1].trim() : url
+  if (text.length < 100) throw new Error('Google Doc appears to be empty or private')
 
   return {
-    author: 'Article',
-    caption: title,
+    author: 'Google Doc',
+    caption: 'Google Doc',
     transcript: text,
     thumbnail: null,
     source: 'article' as SourceType,
   }
 }
 
+async function fetchArticle(url: string) {
+  const res = await fetch(url, {
+    headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SkillScout/1.0)' },
+  })
+  if (!res.ok) throw new Error(`Could not fetch article: ${res.status}`)
+  const html = await res.text()
+  const text = html
+    .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+    .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 8000)
+  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i)
+  const title = titleMatch ? titleMatch[1].trim() : url
+  return { author: 'Article', caption: title, transcript: text, thumbnail: null, source: 'article' as SourceType }
+}
+
 export async function POST(req: NextRequest) {
   try {
     const { url } = await req.json()
     if (!url) return NextResponse.json({ error: 'URL is required' }, { status: 400 })
-
     const source = detectSource(url)
     if (source === 'unknown') return NextResponse.json({ error: 'Unsupported URL type' }, { status: 400 })
-
     let data
     if (source === 'instagram') data = await fetchInstagram(url)
     else if (source === 'tiktok') data = await fetchTikTok(url)
+    else if (source === 'googledoc') data = await fetchGoogleDoc(url)
     else data = await fetchArticle(url)
-
     return NextResponse.json({ success: true, data })
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Unknown error'
