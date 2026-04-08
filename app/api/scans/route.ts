@@ -36,3 +36,15 @@ export async function GET() {
     return NextResponse.json({ error: message }, { status: 500 })
   }
 }
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const { id } = await req.json()
+    const { error } = await supabase.from('scans').delete().eq('id', id)
+    if (error) throw error
+    return NextResponse.json({ success: true })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
