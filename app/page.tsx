@@ -1,9 +1,10 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 
 type Stage = 'idle' | 'extracting' | 'analyzing' | 'github' | 'done' | 'error'
 type TrustLevel = 'high' | 'medium' | 'low'
+type Tab = 'scan' | 'history'
 
 interface ExtractedData {
   author: string
@@ -36,13 +37,34 @@ interface GithubRepo {
   forks: number
   lastUpdated: string
   language: string
-  isForked?: boolean
   url: string
   skillFiles: string[]
   trustScore: number
   trustLevel: TrustLevel
-  signals?: { label: string; positive: boolean }[]
   matchedQuery?: string
+}
+
+interface ScanRecord {
+  id: string
+  created_at: string
+  url: string
+  source: string
+  author: string
+  skill_name: string
+  category: string
+  summary: string
+  key_steps: string[]
+  github_repos: GithubRepo[]
+  search_terms: string[]
+}
+
+interface BatchResult {
+  url: string
+  status: 'pending' | 'processing' | 'done' | 'error'
+  error?: string
+  skillName?: string
+  category?: string
+  githubRepos?: GithubRepo[]
 }
 
 const CATEGORY_ICONS: Record<string, string> = {
@@ -54,46 +76,131 @@ const SOURCE_LABELS: Record<string, string> = {
   instagram: 'Instagram', tiktok: 'TikTok', article: 'Article',
 }
 
-const STAGE_LABELS: Record<string, string> = {
-  extracting: 'Fetching content…',
-  analyzing: 'Analysing with Claude…',
-  github: 'Searching GitHub for skills…',
+async function processSingleUrl(url: string): Promise<{ extracted: ExtractedData; analysis: Analysis; githubRepos: GithubRepo[] }> {
+  // Extract
+  const extractRes = await fetch('/api/extract', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  })
+  const extractData = await extractRes.json()
+  if (!extractData.success) throw new Error(extractData.error || 'Extraction failed')
+
+  // Analyse
+  const analyzeRes = await fetch('/api/analyze', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(extractData.data),
+  })
+  const analyzeData = await analyzeRes.json()
+  if (!analyzeData.success) throw new Error(analyzeData.error || 'Analysis failed')
+  const an: Analysis = analyzeData.analysis
+
+  // GitHub
+  const ghResults: GithubRepo[] = []
+  for (const ghUrl of (an.githubUrls || []).slice(0, 3)) {
+    try {
+      const ghRes = await fetch('/api/github', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: ghUrl }),
+      })
+      const ghData = await ghRes.json()
+      if (ghData.success) ghResults.push(ghData.github)
+    } catch { /* ignore */ }
+  }
+  if (ghResults.length === 0 && an.githubSearchTerms?.length > 0) {
+    try {
+      const searchRes = await fetch('/api/github-search', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ searchTerms: an.githubSearchTerms }),
+      })
+      const searchData = await searchRes.json()
+      if (searchData.results?.length) ghResults.push(...searchData.results)
+    } catch { /* ignore */ }
+  }
+
+  return { extracted: extractData.data, analysis: an, githubRepos: ghResults }
 }
 
 export default function Home() {
-  const [url, setUrl] = useState('')
+  const [tab, setTab] = useState<Tab>('scan')
+  const [urlInput, setUrlInput] = useState('')
   const [stage, setStage] = useState<Stage>('idle')
   const [error, setError] = useState('')
   const [extracted, setExtracted] = useState<ExtractedData | null>(null)
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [githubResults, setGithubResults] = useState<GithubRepo[]>([])
+  const [stageLabel, setStageLabel] = useState('')
+
+  // Batch
+  const [batchMode, setBatchMode] = useState(false)
+  const [batchResults, setBatchResults] = useState<BatchResult[]>([])
+  const [batchRunning, setBatchRunning] = useState(false)
+
+  // History
+  const [history, setHistory] = useState<ScanRecord[]>([])
+  const [historyLoading, setHistoryLoading] = useState(false)
+
+  const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
+  const isBatch = urlCount > 1
+
+  useEffect(() => {
+    if (tab === 'history') loadHistory()
+  }, [tab])
+
+  const loadHistory = async () => {
+    setHistoryLoading(true)
+    try {
+      const res = await fetch('/api/scans')
+      const data = await res.json()
+      if (data.success) setHistory(data.scans)
+    } catch { /* ignore */ }
+    setHistoryLoading(false)
+  }
+
+  const saveScan = async (url: string, extracted: ExtractedData, analysis: Analysis, githubRepos: GithubRepo[]) => {
+    try {
+      await fetch('/api/scans', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          url,
+          source: extracted.source,
+          author: extracted.author,
+          skill_name: analysis.skillName,
+          category: analysis.skillCategory,
+          summary: analysis.summary,
+          key_steps: analysis.keySteps,
+          github_repos: githubRepos.map(g => ({
+            fullName: g.fullName, url: g.url, stars: g.stars,
+            trustScore: g.trustScore, trustLevel: g.trustLevel,
+            description: g.description, skillFiles: g.skillFiles,
+            matchedQuery: g.matchedQuery,
+          })),
+          search_terms: analysis.githubSearchTerms || [],
+        }),
+      })
+    } catch { /* ignore save errors */ }
+  }
 
   const reset = () => {
     setStage('idle'); setError(''); setExtracted(null)
     setAnalysis(null); setGithubResults([])
+    setBatchResults([]); setBatchMode(false)
   }
 
-  const run = async () => {
-    if (!url.trim()) return
-    reset()
-
+  const runSingle = async (url: string) => {
     try {
-      // Step 1: Extract content
-      setStage('extracting')
+      setStageLabel('Fetching content…'); setStage('extracting')
       const extractRes = await fetch('/api/extract', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url }),
       })
       const extractData = await extractRes.json()
       if (!extractData.success) throw new Error(extractData.error || 'Extraction failed')
       setExtracted(extractData.data)
 
-      // Step 2: Analyse with Claude
-      setStage('analyzing')
+      setStageLabel('Analysing with Claude…'); setStage('analyzing')
       const analyzeRes = await fetch('/api/analyze', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(extractData.data),
       })
       const analyzeData = await analyzeRes.json()
@@ -101,39 +208,30 @@ export default function Home() {
       const an: Analysis = analyzeData.analysis
       setAnalysis(an)
 
-      // Step 3: GitHub — explicit URLs first, then search
-      setStage('github')
+      setStageLabel('Searching GitHub…'); setStage('github')
       const ghResults: GithubRepo[] = []
-
-      // Check explicit URLs
       for (const ghUrl of (an.githubUrls || []).slice(0, 3)) {
         try {
           const ghRes = await fetch('/api/github', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ url: ghUrl }),
           })
           const ghData = await ghRes.json()
           if (ghData.success) ghResults.push(ghData.github)
         } catch { /* ignore */ }
       }
-
-      // If no explicit repos found, search GitHub
       if (ghResults.length === 0 && an.githubSearchTerms?.length > 0) {
         try {
           const searchRes = await fetch('/api/github-search', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ searchTerms: an.githubSearchTerms }),
           })
           const searchData = await searchRes.json()
-          if (searchData.results?.length) {
-            ghResults.push(...searchData.results)
-          }
+          if (searchData.results?.length) ghResults.push(...searchData.results)
         } catch { /* ignore */ }
       }
-
       setGithubResults(ghResults)
+      await saveScan(url, extractData.data, an, ghResults)
       setStage('done')
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Something went wrong')
@@ -141,378 +239,516 @@ export default function Home() {
     }
   }
 
-  const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
+  const runBatch = async (urls: string[]) => {
+    setBatchMode(true)
+    setBatchRunning(true)
+    setBatchResults(urls.map(url => ({ url, status: 'pending' })))
+
+    // Process with concurrency limit of 3
+    const CONCURRENCY = 3
+    const queue = [...urls]
+    let active = 0
+
+    const processNext = async () => {
+      if (queue.length === 0) return
+      const url = queue.shift()!
+      active++
+
+      setBatchResults(prev => prev.map(r => r.url === url ? { ...r, status: 'processing' } : r))
+
+      try {
+        const { extracted, analysis, githubRepos } = await processSingleUrl(url)
+        await saveScan(url, extracted, analysis, githubRepos)
+        setBatchResults(prev => prev.map(r => r.url === url ? {
+          ...r, status: 'done',
+          skillName: analysis.skillName,
+          category: analysis.skillCategory,
+          githubRepos,
+        } : r))
+      } catch (err) {
+        setBatchResults(prev => prev.map(r => r.url === url ? {
+          ...r, status: 'error',
+          error: err instanceof Error ? err.message : 'Failed',
+        } : r))
+      }
+
+      active--
+      if (queue.length > 0) await processNext()
+      if (active === 0 && queue.length === 0) setBatchRunning(false)
+    }
+
+    const workers = Array(Math.min(CONCURRENCY, urls.length)).fill(null).map(() => processNext())
+    await Promise.all(workers)
+  }
+
+  const handleScan = () => {
+    const urls = urlInput.trim().split('\n').map(u => u.trim()).filter(u => u.startsWith('http'))
+    if (urls.length === 0) return
+    reset()
+    if (urls.length === 1) {
+      runSingle(urls[0])
+    } else {
+      runBatch(urls)
+    }
+  }
+
+  // Overlap detection
+  const getOverlaps = () => {
+    const repoMap: Record<string, { repo: GithubRepo; urls: string[] }> = {}
+    batchResults.forEach(r => {
+      if (r.status === 'done' && r.githubRepos) {
+        r.githubRepos.forEach(gh => {
+          if (!repoMap[gh.fullName]) repoMap[gh.fullName] = { repo: gh, urls: [] }
+          repoMap[gh.fullName].urls.push(r.url)
+        })
+      }
+    })
+    return Object.values(repoMap).filter(o => o.urls.length > 1)
+  }
+
+  // History overlaps
+  const getHistoryOverlaps = () => {
+    const repoMap: Record<string, { repoName: string; repoUrl: string; skills: string[]; count: number }> = {}
+    history.forEach(scan => {
+      scan.github_repos?.forEach((gh: GithubRepo) => {
+        if (!repoMap[gh.fullName]) repoMap[gh.fullName] = { repoName: gh.fullName, repoUrl: gh.url, skills: [], count: 0 }
+        repoMap[gh.fullName].skills.push(scan.skill_name)
+        repoMap[gh.fullName].count++
+      })
+    })
+    return Object.values(repoMap).filter(o => o.count > 1)
+  }
+
+  const downloadSkillFile = (gh: GithubRepo, an: Analysis | { skillName: string; skillDescription: string; skillCategory: string; keySteps: string[]; contentQuality: string; summary: string }) => {
     const skillContent = `---
-name: ${an.skillName.toLowerCase().replace(/\s+/g, '-')}
-description: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.
+name: ${'skillName' in an ? an.skillName.toLowerCase().replace(/\s+/g, '-') : 'skill'}
+description: ${'skillDescription' in an ? an.skillDescription : ''} Use this skill when working on ${'skillCategory' in an ? an.skillCategory : ''} tasks with Claude.
 ---
 
-# ${an.skillName}
+# ${'skillName' in an ? an.skillName : 'Skill'}
 
-${an.summary}
+${'summary' in an ? an.summary : ''}
 
 ## Source
-- Original content: ${url}
 - GitHub: ${gh.url}
 
 ## Key Steps
-${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}
-
-## Notes
-- Category: ${an.skillCategory}
-- Content quality: ${an.contentQuality}
-- GitHub trust score: ${gh.trustScore}/100
+${'keySteps' in an ? an.keySteps.map((s: string, i: number) => `${i + 1}. ${s}`).join('\n') : ''}
 `
     const blob = new Blob([skillContent], { type: 'text/plain' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `${an.skillName.toLowerCase().replace(/\s+/g, '-')}.skill`
+    a.download = `${'skillName' in an ? an.skillName.toLowerCase().replace(/\s+/g, '-') : 'skill'}.skill`
     a.click()
   }
 
   const isLoading = ['extracting', 'analyzing', 'github'].includes(stage)
-  const hasExplicitRepos = analysis && analysis.githubUrls?.length > 0
-  const hasSearchResults = githubResults.length > 0 && !hasExplicitRepos
+  const overlaps = batchMode ? getOverlaps() : []
+  const historyOverlaps = getHistoryOverlaps()
 
   return (
     <main className="main">
-
-      {/* Nav */}
       <nav className="nav">
         <span className="nav-logo">SkillScout</span>
-        <span className="nav-tagline">Claude skill discovery</span>
-      </nav>
-
-      {/* Hero */}
-      <section className="hero">
-        <h1 className="hero-title">
-          Find the skill<br />
-          <em>behind the video.</em>
-        </h1>
-        <p className="hero-sub">
-          Paste an Instagram reel, TikTok, or article. We extract the Claude skill,
-          search GitHub for matching repos, and give you a file ready to install.
-        </p>
-      </section>
-
-      {/* Input */}
-      <section className="input-section">
-        <div className={`input-box ${isLoading ? 'loading' : ''}`}>
-          <input
-            type="url"
-            value={url}
-            onChange={e => setUrl(e.target.value)}
-            onKeyDown={e => e.key === 'Enter' && !isLoading && run()}
-            placeholder="instagram.com/reel/…  or  tiktok.com/@…  or  any article URL"
-            className="url-input"
-            disabled={isLoading}
-          />
-          <button onClick={run} disabled={isLoading || !url.trim()} className="scan-btn">
-            {isLoading ? <span className="spinner" /> : 'Scan'}
+        <div className="nav-tabs">
+          <button className={`nav-tab ${tab === 'scan' ? 'active' : ''}`} onClick={() => setTab('scan')}>Scan</button>
+          <button className={`nav-tab ${tab === 'history' ? 'active' : ''}`} onClick={() => setTab('history')}>
+            History {history.length > 0 && <span className="count">{history.length}</span>}
           </button>
         </div>
-        {isLoading && (
-          <div className="stage-status animate-fade-in">
-            <span className="stage-dot-pulse" />
-            {STAGE_LABELS[stage]}
-          </div>
-        )}
-      </section>
+      </nav>
 
-      {/* Error */}
-      {stage === 'error' && (
-        <section className="error-section animate-fade-up">
-          <div className="error-box">
-            <div className="error-title">Could not process this URL</div>
-            <div className="error-msg">{error}</div>
-            <button onClick={reset} className="link-btn">Try again →</button>
-          </div>
-        </section>
-      )}
+      {/* SCAN TAB */}
+      {tab === 'scan' && (
+        <>
+          {stage === 'idle' && !batchMode && (
+            <section className="hero">
+              <h1 className="hero-title">Find the skill<br /><em>behind the video.</em></h1>
+              <p className="hero-sub">Paste one URL or multiple (one per line) for batch processing. Instagram, TikTok, or articles.</p>
+            </section>
+          )}
 
-      {/* Results */}
-      {stage === 'done' && analysis && (
-        <section className="results animate-fade-up">
-
-          <div className="results-divider"><span>Result</span></div>
-
-          {/* Skill summary */}
-          <article className="skill-card">
-            <header className="skill-card-header">
-              <div className="skill-pills">
-                <span className="pill">
-                  {CATEGORY_ICONS[analysis.skillCategory]} {analysis.skillCategory}
-                </span>
-                {extracted && <span className="pill">{SOURCE_LABELS[extracted.source]}</span>}
-                <span className={`pill quality-${analysis.contentQuality}`}>{analysis.contentQuality} quality</span>
-                <span className={`pill relevance-${analysis.claudeRelevance}`}>{analysis.claudeRelevance} relevance</span>
+          {/* Input */}
+          {(stage === 'idle' || stage === 'error') && !batchMode && (
+            <section className="input-section">
+              <div className={`input-box ${isBatch ? 'batch' : ''}`}>
+                <textarea
+                  value={urlInput}
+                  onChange={e => setUrlInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && !isBatch && (e.preventDefault(), handleScan())}
+                  placeholder={`instagram.com/reel/…\n\nFor batch: paste multiple URLs, one per line`}
+                  className="url-input"
+                  rows={isBatch ? Math.min(urlCount + 1, 6) : 1}
+                />
+                <button onClick={handleScan} disabled={urlCount === 0} className="scan-btn">
+                  {isBatch ? `Scan ${urlCount}` : 'Scan'}
+                </button>
               </div>
-            </header>
+              {isBatch && <p className="batch-hint">↑ {urlCount} URLs detected — will process in parallel</p>}
+              {stage === 'error' && (
+                <div className="error-box">
+                  <span className="error-title">Error: </span>
+                  <span className="error-msg">{error}</span>
+                  <button onClick={reset} className="link-btn" style={{marginLeft: '12px'}}>Try again →</button>
+                </div>
+              )}
+            </section>
+          )}
 
-            <h2 className="skill-name">{analysis.skillName}</h2>
-            <p className="skill-summary">{analysis.summary}</p>
-
-            {analysis.keySteps.length > 0 && (
-              <div className="key-steps">
-                <p className="steps-label">Key steps</p>
-                <ol className="steps-list">
-                  {analysis.keySteps.map((step, i) => (
-                    <li key={i} className="step-item">
-                      <span className="step-num">{i + 1}</span>
-                      <span>{step}</span>
-                    </li>
-                  ))}
-                </ol>
+          {/* Single scan progress */}
+          {isLoading && (
+            <section className="progress-section animate-fade-in">
+              <div className="stage-status">
+                <span className="stage-dot-pulse" />
+                {stageLabel}
               </div>
-            )}
+            </section>
+          )}
 
-            {extracted?.author && (
-              <footer className="skill-footer">
-                <span className="author-by">by</span>
-                <span className="author-name">@{extracted.author}</span>
-                {analysis.authorCredibility && (
-                  <span className="author-cred">· {analysis.authorCredibility}</span>
-                )}
-              </footer>
-            )}
-          </article>
-
-          {/* GitHub results */}
-          {githubResults.length > 0 && (
-            <div className="github-section">
-              <p className="section-label">
-                {hasSearchResults
-                  ? `GitHub repos found for "${analysis.skillName}"`
-                  : 'GitHub'}
-              </p>
-              {hasSearchResults && (
-                <p className="search-note">
-                  No repo was linked in the video — these are the closest matches found on GitHub.
+          {/* Batch results */}
+          {batchMode && (
+            <section className="batch-section animate-fade-up">
+              <div className="batch-header">
+                <p className="section-label">
+                  Batch scan — {batchResults.filter(r => r.status === 'done').length}/{batchResults.length} complete
+                  {batchRunning && <span className="batch-running"> · running</span>}
                 </p>
+                {!batchRunning && <button onClick={reset} className="link-btn">← New scan</button>}
+              </div>
+
+              {/* Overlaps */}
+              {overlaps.length > 0 && (
+                <div className="overlaps-box">
+                  <p className="overlaps-title">🔁 Repos appearing in multiple videos</p>
+                  {overlaps.map((o, i) => (
+                    <div key={i} className="overlap-item">
+                      <a href={o.repo.url} target="_blank" rel="noopener noreferrer" className="overlap-repo">{o.repo.fullName}</a>
+                      <span className="overlap-count">{o.urls.length} videos</span>
+                    </div>
+                  ))}
+                </div>
               )}
 
-              {githubResults.map((gh, i) => (
-                <div key={i} className="github-card">
-                  <div className="github-top">
-                    <div className="github-info">
-                      <a href={gh.url} target="_blank" rel="noopener noreferrer" className="repo-name">
-                        {gh.fullName}
-                      </a>
-                      {gh.matchedQuery && (
-                        <span className="matched-query">matched: {gh.matchedQuery}</span>
-                      )}
-                      {gh.description && <p className="repo-desc">{gh.description}</p>}
-                      <div className="repo-meta">
-                        <span>★ {gh.stars}</span>
-                        <span>⑂ {gh.forks}</span>
-                        {gh.language && <span>{gh.language}</span>}
-                        <span>{new Date(gh.lastUpdated).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}</span>
+              <div className="batch-list">
+                {batchResults.map((r, i) => (
+                  <div key={i} className={`batch-item status-${r.status}`}>
+                    <div className="batch-item-top">
+                      <div className="batch-status-icon">
+                        {r.status === 'pending' && '○'}
+                        {r.status === 'processing' && <span className="spinner" />}
+                        {r.status === 'done' && '✓'}
+                        {r.status === 'error' && '✕'}
+                      </div>
+                      <div className="batch-item-info">
+                        <p className="batch-url">{r.url.replace('https://', '').slice(0, 60)}…</p>
+                        {r.skillName && <p className="batch-skill">{CATEGORY_ICONS[r.category || 'other']} {r.skillName}</p>}
+                        {r.error && <p className="batch-error">{r.error}</p>}
                       </div>
                     </div>
-                    <div className={`trust-badge trust-${gh.trustLevel}`}>
-                      <span className="trust-score">{gh.trustScore}</span>
-                      <span className="trust-label">{gh.trustLevel}</span>
-                    </div>
+                    {r.status === 'done' && r.githubRepos && r.githubRepos.length > 0 && (
+                      <div className="batch-repos">
+                        {r.githubRepos.slice(0, 2).map((gh, j) => (
+                          <div key={j} className="batch-repo">
+                            <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
+                            <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
+                ))}
+              </div>
+            </section>
+          )}
 
-                  {gh.skillFiles && gh.skillFiles.length > 0 && (
-                    <div className="skill-files">
-                      <p className="skill-files-label">Skill files found</p>
-                      {gh.skillFiles.map((f, j) => (
-                        <div key={j} className="skill-file">◈ {f}</div>
+          {/* Single result */}
+          {stage === 'done' && analysis && !batchMode && (
+            <section className="results animate-fade-up">
+              <div className="results-divider"><span>Result</span></div>
+
+              <article className="skill-card">
+                <div className="skill-pills">
+                  <span className="pill">{CATEGORY_ICONS[analysis.skillCategory]} {analysis.skillCategory}</span>
+                  {extracted && <span className="pill">{SOURCE_LABELS[extracted.source]}</span>}
+                  <span className={`pill quality-${analysis.contentQuality}`}>{analysis.contentQuality} quality</span>
+                  <span className={`pill relevance-${analysis.claudeRelevance}`}>{analysis.claudeRelevance} relevance</span>
+                </div>
+                <h2 className="skill-name">{analysis.skillName}</h2>
+                <p className="skill-summary">{analysis.summary}</p>
+                {analysis.keySteps.length > 0 && (
+                  <div className="key-steps">
+                    <p className="steps-label">Key steps</p>
+                    <ol className="steps-list">
+                      {analysis.keySteps.map((step, i) => (
+                        <li key={i} className="step-item">
+                          <span className="step-num">{i + 1}</span><span>{step}</span>
+                        </li>
                       ))}
-                    </div>
-                  )}
-
-                  <div className="github-actions">
-                    <a href={gh.url} target="_blank" rel="noopener noreferrer" className="link-btn">
-                      View on GitHub →
-                    </a>
-                    <button onClick={() => downloadSkillFile(gh, analysis)} className="download-btn">
-                      Download .skill file ↓
-                    </button>
+                    </ol>
                   </div>
+                )}
+                {extracted?.author && (
+                  <footer className="skill-footer">
+                    <span className="author-by">by</span>
+                    <span className="author-name">@{extracted.author}</span>
+                    {analysis.authorCredibility && <span className="author-cred">· {analysis.authorCredibility}</span>}
+                  </footer>
+                )}
+              </article>
+
+              {githubResults.length > 0 && (
+                <div className="github-section">
+                  <p className="section-label">
+                    {analysis.githubUrls?.length > 0 ? 'GitHub' : `GitHub repos found for "${analysis.skillName}"`}
+                  </p>
+                  {analysis.githubUrls?.length === 0 && (
+                    <p className="search-note">No repo was linked in the video — closest matches found on GitHub.</p>
+                  )}
+                  {githubResults.map((gh, i) => (
+                    <div key={i} className="github-card">
+                      <div className="github-top">
+                        <div className="github-info">
+                          <a href={gh.url} target="_blank" rel="noopener noreferrer" className="repo-name">{gh.fullName}</a>
+                          {gh.matchedQuery && <span className="matched-query">matched: {gh.matchedQuery}</span>}
+                          {gh.description && <p className="repo-desc">{gh.description}</p>}
+                          <div className="repo-meta">
+                            <span>★ {gh.stars}</span>
+                            {gh.language && <span>{gh.language}</span>}
+                            <span>{new Date(gh.lastUpdated).toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })}</span>
+                          </div>
+                        </div>
+                        <div className={`trust-badge trust-${gh.trustLevel}`}>
+                          <span className="trust-score">{gh.trustScore}</span>
+                          <span className="trust-label">{gh.trustLevel}</span>
+                        </div>
+                      </div>
+                      {gh.skillFiles?.length > 0 && (
+                        <div className="skill-files">
+                          <p className="skill-files-label">Skill files found</p>
+                          {gh.skillFiles.map((f, j) => <div key={j} className="skill-file">◈ {f}</div>)}
+                        </div>
+                      )}
+                      <div className="github-actions">
+                        <a href={gh.url} target="_blank" rel="noopener noreferrer" className="link-btn">View on GitHub →</a>
+                        <button onClick={() => downloadSkillFile(gh, analysis)} className="download-btn">Download .skill ↓</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {githubResults.length === 0 && (
+                <div className="no-github">
+                  <p className="no-github-title">No matching repos found</p>
+                  <p className="no-github-sub">Generate a skill file from the extracted steps.</p>
+                  <button onClick={() => downloadSkillFile(
+                    { url: urlInput.trim(), fullName: 'manual', trustScore: 0, trustLevel: 'low', skillFiles: [], description: '', stars: 0, forks: 0, lastUpdated: '', language: '', name: '' },
+                    analysis
+                  )} className="download-btn">Generate skill file ↓</button>
+                </div>
+              )}
+
+              <button onClick={reset} className="new-scan">← Scan another URL</button>
+            </section>
+          )}
+        </>
+      )}
+
+      {/* HISTORY TAB */}
+      {tab === 'history' && (
+        <section className="history-section">
+          <div className="history-header">
+            <h2 className="history-title">Scan history</h2>
+            <button onClick={loadHistory} className="link-btn">Refresh</button>
+          </div>
+
+          {historyOverlaps.length > 0 && (
+            <div className="overlaps-box">
+              <p className="overlaps-title">🔁 Repos appearing across multiple scans</p>
+              {historyOverlaps.map((o, i) => (
+                <div key={i} className="overlap-item">
+                  <a href={o.repoUrl} target="_blank" rel="noopener noreferrer" className="overlap-repo">{o.repoName}</a>
+                  <span className="overlap-count">{o.count} scans</span>
                 </div>
               ))}
             </div>
           )}
 
-          {/* Truly nothing found */}
-          {githubResults.length === 0 && (
-            <div className="no-github">
-              <p className="no-github-title">No matching repos found</p>
-              <p className="no-github-sub">
-                This content shares techniques but we could not find a matching GitHub repo.
-                You can still generate a skill file from the extracted steps.
-              </p>
-              <button onClick={() => downloadSkillFile(
-                { url, fullName: 'manual', trustScore: 0, trustLevel: 'low', skillFiles: [], description: '', stars: 0, forks: 0, lastUpdated: '', language: '', name: '' },
-                analysis
-              )} className="download-btn">
-                Generate skill file anyway ↓
-              </button>
-            </div>
+          {historyLoading && <p className="loading-msg">Loading…</p>}
+
+          {!historyLoading && history.length === 0 && (
+            <p className="empty-msg">No scans yet. Go to the Scan tab to get started.</p>
           )}
 
-          <button onClick={reset} className="new-scan">← Scan another URL</button>
+          <div className="history-list">
+            {history.map((scan, i) => (
+              <div key={i} className="history-item">
+                <div className="history-item-header">
+                  <span className="pill">{CATEGORY_ICONS[scan.category] || '🧩'} {scan.category}</span>
+                  <span className="history-date">{new Date(scan.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                </div>
+                <h3 className="history-skill-name">{scan.skill_name}</h3>
+                <p className="history-summary">{scan.summary}</p>
+                <p className="history-url">{scan.url.replace('https://', '').slice(0, 70)}</p>
+                {scan.github_repos?.length > 0 && (
+                  <div className="history-repos">
+                    {scan.github_repos.slice(0, 3).map((gh: GithubRepo, j: number) => (
+                      <div key={j} className="batch-repo">
+                        <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
+                        <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
       <style jsx>{`
         .main { max-width: 680px; margin: 0 auto; padding: 0 28px 120px; }
 
-        .nav {
-          display: flex; align-items: baseline; justify-content: space-between;
-          padding: 36px 0 20px; border-bottom: 1px solid var(--border);
-        }
+        /* Nav */
+        .nav { display: flex; align-items: center; justify-content: space-between; padding: 36px 0 20px; border-bottom: 1px solid var(--border); }
         .nav-logo { font-family: var(--font-display); font-size: 20px; font-weight: 600; letter-spacing: -0.3px; }
-        .nav-tagline { font-size: 12px; color: var(--text-dim); letter-spacing: 0.04em; text-transform: uppercase; }
+        .nav-tabs { display: flex; gap: 4px; }
+        .nav-tab { background: none; border: 1px solid transparent; padding: 6px 14px; font-family: var(--font-body); font-size: 13px; color: var(--text-muted); cursor: pointer; border-radius: 100px; transition: all 0.15s; display: flex; align-items: center; gap: 6px; }
+        .nav-tab:hover { color: var(--text); }
+        .nav-tab.active { color: var(--text); border-color: var(--border-dark); background: var(--bg-2); }
+        .count { background: var(--bg-3); border: 1px solid var(--border); border-radius: 100px; padding: 1px 6px; font-size: 10px; color: var(--text-muted); }
 
-        .hero { padding: 72px 0 56px; border-bottom: 1px solid var(--border); margin-bottom: 56px; }
-        .hero-title {
-          font-family: var(--font-display);
-          font-size: clamp(42px, 7vw, 64px);
-          font-weight: 500; line-height: 1.1; letter-spacing: -1.5px; margin-bottom: 20px;
-        }
+        /* Hero */
+        .hero { padding: 64px 0 48px; border-bottom: 1px solid var(--border); margin-bottom: 48px; }
+        .hero-title { font-family: var(--font-display); font-size: clamp(38px, 6vw, 58px); font-weight: 500; line-height: 1.1; letter-spacing: -1.2px; margin-bottom: 16px; }
         .hero-title em { font-style: italic; color: var(--text-muted); }
-        .hero-sub { font-size: 16px; line-height: 1.7; color: var(--text-muted); max-width: 480px; font-weight: 300; }
+        .hero-sub { font-size: 15px; line-height: 1.7; color: var(--text-muted); max-width: 480px; font-weight: 300; }
 
-        .input-section { margin-bottom: 64px; }
-        .input-box {
-          display: flex; border: 1px solid var(--border-dark); border-radius: 3px;
-          background: var(--bg-2); transition: border-color 0.2s, box-shadow 0.2s; overflow: hidden;
-        }
+        /* Input */
+        .input-section { margin-bottom: 48px; }
+        .input-box { display: flex; align-items: stretch; border: 1px solid var(--border-dark); border-radius: 3px; background: var(--bg-2); transition: border-color 0.2s, box-shadow 0.2s; overflow: hidden; }
         .input-box:focus-within { border-color: var(--text); box-shadow: 0 0 0 3px rgba(26,25,21,0.06); }
-        .input-box.loading { opacity: 0.7; }
-        .url-input {
-          flex: 1; border: none; outline: none; padding: 16px 18px;
-          font-family: var(--font-body); font-size: 14px; font-weight: 300;
-          color: var(--text); background: transparent; min-width: 0;
-        }
+        .input-box.batch { align-items: flex-start; }
+        .url-input { flex: 1; border: none; outline: none; padding: 14px 16px; font-family: var(--font-body); font-size: 14px; font-weight: 300; color: var(--text); background: transparent; min-width: 0; resize: none; line-height: 1.5; }
         .url-input::placeholder { color: var(--text-dim); }
-        .scan-btn {
-          background: var(--text); color: white; border: none; padding: 0 24px;
-          font-family: var(--font-body); font-size: 13px; font-weight: 500;
-          letter-spacing: 0.04em; cursor: pointer; transition: opacity 0.15s;
-          min-width: 80px; display: flex; align-items: center; justify-content: center;
-        }
+        .scan-btn { background: var(--text); color: white; border: none; padding: 0 22px; font-family: var(--font-body); font-size: 13px; font-weight: 500; letter-spacing: 0.03em; cursor: pointer; transition: opacity 0.15s; white-space: nowrap; min-width: 72px; }
         .scan-btn:hover:not(:disabled) { opacity: 0.8; }
         .scan-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+        .batch-hint { font-size: 12px; color: var(--text-muted); margin-top: 8px; font-weight: 300; }
 
-        .stage-status {
-          display: flex; align-items: center; gap: 10px; margin-top: 14px;
-          font-size: 13px; color: var(--text-muted); font-weight: 300;
-        }
-        .stage-dot-pulse {
-          width: 6px; height: 6px; border-radius: 50%; background: var(--accent-2);
-          animation: pulse 1.4s ease-in-out infinite;
-        }
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50% { opacity: 0.4; transform: scale(0.8); }
-        }
+        .error-box { margin-top: 12px; padding: 14px 16px; border: 1px solid var(--red-border); border-radius: 3px; background: var(--red-bg); font-size: 13px; }
+        .error-title { font-weight: 500; color: var(--red); }
+        .error-msg { color: var(--text-muted); font-weight: 300; }
 
-        .error-section { margin-bottom: 40px; }
-        .error-box { padding: 24px; border: 1px solid var(--red-border); border-radius: 3px; background: var(--red-bg); }
-        .error-title { font-weight: 500; color: var(--red); margin-bottom: 6px; font-size: 14px; }
-        .error-msg { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; font-weight: 300; }
-
-        .link-btn {
-          background: none; border: none; padding: 0; font-family: var(--font-body);
-          font-size: 13px; color: var(--text); cursor: pointer;
-          text-decoration: underline; text-underline-offset: 3px;
-        }
+        .link-btn { background: none; border: none; padding: 0; font-family: var(--font-body); font-size: 13px; color: var(--text); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
         .link-btn:hover { color: var(--text-muted); }
 
+        /* Progress */
+        .progress-section { margin: 32px 0; }
+        .stage-status { display: flex; align-items: center; gap: 10px; font-size: 13px; color: var(--text-muted); font-weight: 300; }
+        .stage-dot-pulse { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-2); animation: pulse 1.4s ease-in-out infinite; flex-shrink: 0; }
+        @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.8); } }
+
+        /* Batch */
+        .batch-section { margin-top: 40px; }
+        .batch-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+        .batch-running { color: var(--accent-2); }
+        .batch-list { display: flex; flex-direction: column; gap: 8px; }
+        .batch-item { padding: 16px; border: 1px solid var(--border); border-radius: 3px; background: var(--bg-2); }
+        .batch-item.status-processing { border-color: var(--amber-border); background: var(--amber-bg); }
+        .batch-item.status-done { border-color: var(--green-border); }
+        .batch-item.status-error { border-color: var(--red-border); background: var(--red-bg); }
+        .batch-item-top { display: flex; gap: 12px; align-items: flex-start; }
+        .batch-status-icon { font-size: 14px; color: var(--text-muted); flex-shrink: 0; margin-top: 1px; width: 16px; }
+        .status-done .batch-status-icon { color: var(--green); }
+        .status-error .batch-status-icon { color: var(--red); }
+        .batch-item-info { flex: 1; min-width: 0; }
+        .batch-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 4px; }
+        .batch-skill { font-size: 13px; font-weight: 500; color: var(--text); }
+        .batch-error { font-size: 12px; color: var(--red); font-weight: 300; }
+        .batch-repos { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 6px; }
+        .batch-repo { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .batch-repo-name { font-size: 12px; color: var(--text); text-decoration: none; font-weight: 400; }
+        .batch-repo-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+        .mini-trust { font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 100px; border: 1px solid; }
+
+        /* Overlaps */
+        .overlaps-box { padding: 16px 20px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 3px; margin-bottom: 20px; }
+        .overlaps-title { font-size: 13px; font-weight: 500; margin-bottom: 10px; }
+        .overlap-item { display: flex; align-items: center; justify-content: space-between; padding: 6px 0; border-top: 1px solid var(--border); }
+        .overlap-repo { font-size: 13px; color: var(--text); text-decoration: none; font-weight: 400; }
+        .overlap-repo:hover { text-decoration: underline; text-underline-offset: 2px; }
+        .overlap-count { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+
+        /* Results */
         .results { display: flex; flex-direction: column; gap: 0; }
-        .results-divider {
-          display: flex; align-items: center; gap: 16px; margin-bottom: 40px;
-        }
-        .results-divider::before, .results-divider::after {
-          content: ''; flex: 1; height: 1px; background: var(--border);
-        }
+        .results-divider { display: flex; align-items: center; gap: 16px; margin: 40px 0; }
+        .results-divider::before, .results-divider::after { content: ''; flex: 1; height: 1px; background: var(--border); }
         .results-divider span { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.1em; }
 
-        .skill-card { padding: 0 0 48px; border-bottom: 1px solid var(--border); margin-bottom: 48px; }
-        .skill-card-header { margin-bottom: 20px; }
-        .skill-pills { display: flex; flex-wrap: wrap; gap: 6px; }
-        .pill {
-          display: inline-flex; align-items: center; gap: 4px;
-          padding: 4px 10px; border-radius: 100px; font-size: 11px; font-weight: 400;
-          border: 1px solid var(--border); color: var(--text-muted); background: var(--bg-3);
-        }
+        .skill-card { padding: 0 0 40px; border-bottom: 1px solid var(--border); margin-bottom: 40px; }
+        .skill-pills { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 20px; }
+        .pill { display: inline-flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 100px; font-size: 11px; border: 1px solid var(--border); color: var(--text-muted); background: var(--bg-3); }
         .quality-high, .relevance-high { color: var(--green); background: var(--green-bg); border-color: var(--green-border); }
         .quality-medium, .relevance-medium { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-border); }
         .quality-low, .relevance-low { color: var(--red); background: var(--red-bg); border-color: var(--red-border); }
 
-        .skill-name {
-          font-family: var(--font-display); font-size: clamp(28px, 5vw, 42px);
-          font-weight: 500; letter-spacing: -0.8px; line-height: 1.15; margin-bottom: 16px;
-        }
-        .skill-summary { font-size: 16px; line-height: 1.75; color: var(--text-muted); font-weight: 300; margin-bottom: 32px; max-width: 560px; }
-
-        .key-steps { margin-bottom: 32px; }
-        .steps-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 14px; }
-        .steps-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+        .skill-name { font-family: var(--font-display); font-size: clamp(26px, 4.5vw, 38px); font-weight: 500; letter-spacing: -0.6px; line-height: 1.15; margin-bottom: 14px; }
+        .skill-summary { font-size: 15px; line-height: 1.75; color: var(--text-muted); font-weight: 300; margin-bottom: 28px; }
+        .key-steps { margin-bottom: 28px; }
+        .steps-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); margin-bottom: 12px; }
+        .steps-list { list-style: none; display: flex; flex-direction: column; gap: 9px; }
         .step-item { display: flex; align-items: flex-start; gap: 14px; font-size: 14px; line-height: 1.6; font-weight: 300; }
-        .step-num { font-family: var(--font-display); font-style: italic; font-size: 16px; color: var(--accent-2); flex-shrink: 0; width: 16px; margin-top: -1px; }
-
-        .skill-footer { padding-top: 20px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 6px; font-size: 13px; }
+        .step-num { font-family: var(--font-display); font-style: italic; font-size: 15px; color: var(--accent-2); flex-shrink: 0; width: 16px; }
+        .skill-footer { padding-top: 18px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 6px; font-size: 13px; }
         .author-by { color: var(--text-dim); }
-        .author-name { color: var(--text); font-weight: 400; }
+        .author-name { color: var(--text); }
         .author-cred { color: var(--text-dim); font-weight: 300; }
 
-        .github-section { margin-bottom: 48px; display: flex; flex-direction: column; gap: 16px; }
+        .github-section { margin-bottom: 40px; display: flex; flex-direction: column; gap: 14px; }
         .section-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.1em; color: var(--text-dim); }
-        .search-note { font-size: 13px; color: var(--text-muted); font-weight: 300; margin-top: -8px; line-height: 1.5; }
-
-        .github-card {
-          border: 1px solid var(--border); border-radius: 3px; padding: 24px;
-          background: var(--bg-2); display: flex; flex-direction: column; gap: 16px;
-        }
-        .github-top { display: flex; gap: 16px; justify-content: space-between; align-items: flex-start; }
+        .search-note { font-size: 13px; color: var(--text-muted); font-weight: 300; margin-top: -6px; }
+        .github-card { border: 1px solid var(--border); border-radius: 3px; padding: 22px; background: var(--bg-2); display: flex; flex-direction: column; gap: 14px; }
+        .github-top { display: flex; gap: 14px; justify-content: space-between; align-items: flex-start; }
         .github-info { flex: 1; min-width: 0; }
-        .repo-name { font-size: 15px; font-weight: 500; color: var(--text); text-decoration: none; display: block; margin-bottom: 4px; }
-        .repo-name:hover { text-decoration: underline; text-underline-offset: 3px; }
-        .matched-query { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 6px; font-family: var(--font-mono); }
-        .repo-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 10px; line-height: 1.5; font-weight: 300; }
-        .repo-meta { display: flex; gap: 14px; font-size: 12px; color: var(--text-dim); flex-wrap: wrap; }
-
-        .trust-badge {
-          display: flex; flex-direction: column; align-items: center; justify-content: center;
-          width: 60px; height: 60px; border-radius: 3px; border: 1px solid; flex-shrink: 0; gap: 1px;
-        }
-        .trust-score { font-size: 22px; font-weight: 500; font-family: var(--font-display); line-height: 1; }
-        .trust-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; }
-
-        .skill-files { padding: 14px 16px; background: var(--bg-3); border-radius: 2px; }
-        .skill-files-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 8px; }
-        .skill-file { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); padding: 3px 0; }
-
-        .github-actions { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-
-        .download-btn {
-          background: var(--text); color: white; border: none; padding: 10px 20px;
-          font-family: var(--font-body); font-size: 13px; font-weight: 400;
-          cursor: pointer; border-radius: 2px; transition: opacity 0.15s;
-        }
+        .repo-name { font-size: 15px; font-weight: 500; color: var(--text); text-decoration: none; display: block; margin-bottom: 3px; }
+        .repo-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+        .matched-query { display: block; font-size: 11px; color: var(--text-dim); margin-bottom: 5px; font-family: var(--font-mono); }
+        .repo-desc { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; line-height: 1.5; font-weight: 300; }
+        .repo-meta { display: flex; gap: 12px; font-size: 12px; color: var(--text-dim); }
+        .trust-badge { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 56px; height: 56px; border-radius: 3px; border: 1px solid; flex-shrink: 0; }
+        .trust-score { font-size: 20px; font-weight: 500; font-family: var(--font-display); line-height: 1; }
+        .trust-label { font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 2px; }
+        .skill-files { padding: 12px 14px; background: var(--bg-3); border-radius: 2px; }
+        .skill-files-label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-dim); margin-bottom: 6px; }
+        .skill-file { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); padding: 2px 0; }
+        .github-actions { display: flex; align-items: center; gap: 14px; }
+        .download-btn { background: var(--text); color: white; border: none; padding: 9px 18px; font-family: var(--font-body); font-size: 13px; font-weight: 400; cursor: pointer; border-radius: 2px; transition: opacity 0.15s; }
         .download-btn:hover { opacity: 0.75; }
-
-        .no-github { padding: 32px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-bottom: 40px; }
+        .no-github { padding: 28px 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); margin-bottom: 32px; }
         .no-github-title { font-size: 15px; font-weight: 500; margin-bottom: 6px; }
-        .no-github-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 16px; font-weight: 300; line-height: 1.6; }
-
-        .new-scan {
-          background: none; border: none; padding: 0; font-family: var(--font-body);
-          font-size: 13px; color: var(--text-muted); cursor: pointer;
-          text-decoration: underline; text-underline-offset: 3px; margin-top: 8px;
-        }
+        .no-github-sub { font-size: 13px; color: var(--text-muted); margin-bottom: 14px; font-weight: 300; }
+        .new-scan { background: none; border: none; padding: 0; font-family: var(--font-body); font-size: 13px; color: var(--text-muted); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; margin-top: 8px; }
         .new-scan:hover { color: var(--text); }
 
+        /* History */
+        .history-section { margin-top: 40px; }
+        .history-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 28px; }
+        .history-title { font-family: var(--font-display); font-size: 28px; font-weight: 500; letter-spacing: -0.5px; }
+        .loading-msg, .empty-msg { font-size: 14px; color: var(--text-muted); font-weight: 300; padding: 40px 0; }
+        .history-list { display: flex; flex-direction: column; gap: 0; }
+        .history-item { padding: 24px 0; border-bottom: 1px solid var(--border); }
+        .history-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+        .history-date { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+        .history-skill-name { font-family: var(--font-display); font-size: 20px; font-weight: 500; letter-spacing: -0.3px; margin-bottom: 6px; }
+        .history-summary { font-size: 13px; color: var(--text-muted); line-height: 1.6; font-weight: 300; margin-bottom: 8px; }
+        .history-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 10px; }
+        .history-repos { display: flex; flex-direction: column; gap: 5px; }
+
         @media (max-width: 520px) {
-          .main { padding: 0 18px 80px; }
+          .main { padding: 0 16px 80px; }
           .github-top { flex-direction: column; }
-          .trust-badge { flex-direction: row; width: auto; padding: 8px 14px; gap: 8px; }
+          .trust-badge { flex-direction: row; width: auto; padding: 6px 12px; gap: 8px; }
         }
       `}</style>
     </main>
