@@ -174,6 +174,7 @@ async function fetchNotion(url: string) {
   if (!succeeded) throw new Error('Apify run did not succeed in time')
   const datasetRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}`)
   const items = await datasetRes.json()
+  console.log('Notion dataset:', JSON.stringify(items))
   const text = items?.[0]?.text
   if (!text || text.length < 50) throw new Error('Notion page appears empty or private')
   return {
