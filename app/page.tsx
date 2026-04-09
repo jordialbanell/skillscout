@@ -306,23 +306,72 @@ export default function Home() {
 
   const SUPPORTING_FOLDERS = ['references', 'scripts', 'assets', 'examples', 'templates', 'docs']
 
-  const fetchFolderFiles = async (repoPath: string, folderName: string): Promise<RepoFile[]> => {
+  const fetchRepoTree = async (repoPath: string): Promise<RepoFile[]> => {
+    const MAX_FILES = 20
+    const files: RepoFile[] = []
     try {
-      const res = await fetch(`https://api.github.com/repos/${repoPath}/contents/${folderName}`, {
+      // Fetch root contents
+      const rootRes = await fetch(`https://api.github.com/repos/${repoPath}/contents`, {
         headers: { 'User-Agent': 'SkillScout/1.0' },
       })
-      if (!res.ok) return []
-      const items = await res.json()
-      if (!Array.isArray(items)) return []
-      const files: RepoFile[] = []
-      for (const item of items.filter((f: { type: string; name: string }) => f.type === 'file').slice(0, 20)) {
+      if (!rootRes.ok) return files
+      const rootItems = await rootRes.json()
+      if (!Array.isArray(rootItems)) return files
+
+      // Collect root .md and .skill files (excluding README which is handled separately)
+      const rootFiles = rootItems.filter((f: { type: string; name: string }) =>
+        f.type === 'file' && (f.name.endsWith('.md') || f.name.endsWith('.skill')) && !f.name.toLowerCase().startsWith('readme')
+      )
+      for (const item of rootFiles) {
+        if (files.length >= MAX_FILES) break
         try {
           const fileRes = await fetch(item.download_url)
-          if (fileRes.ok) files.push({ path: `${folderName}/${item.name}`, content: await fileRes.text() })
+          if (fileRes.ok) files.push({ path: item.name, content: await fileRes.text() })
         } catch { /* ignore */ }
       }
+
+      // Collect subdirectories to scan — known supporting folders + any other dirs
+      const knownSet = new Set(SUPPORTING_FOLDERS)
+      const subdirs = rootItems.filter((f: { type: string; name: string }) => f.type === 'dir')
+      // Prioritize known folders, then others
+      const sortedDirs = [
+        ...subdirs.filter((d: { name: string }) => knownSet.has(d.name)),
+        ...subdirs.filter((d: { name: string }) => !knownSet.has(d.name) && !d.name.startsWith('.') && d.name !== 'node_modules' && d.name !== '__pycache__'),
+      ]
+
+      // Fetch subdirectories in parallel
+      const dirResults = await Promise.all(sortedDirs.map(async (dir: { name: string; path: string }) => {
+        try {
+          const dirRes = await fetch(`https://api.github.com/repos/${repoPath}/contents/${dir.path}`, {
+            headers: { 'User-Agent': 'SkillScout/1.0' },
+          })
+          if (!dirRes.ok) return []
+          const dirItems = await dirRes.json()
+          if (!Array.isArray(dirItems)) return []
+          const relevant = dirItems.filter((f: { type: string; name: string }) =>
+            f.type === 'file' && (f.name.endsWith('.md') || f.name.endsWith('.skill'))
+          )
+          const fetched: RepoFile[] = []
+          for (const item of relevant) {
+            try {
+              const fileRes = await fetch(item.download_url)
+              if (fileRes.ok) fetched.push({ path: `${dir.name}/${item.name}`, content: await fileRes.text() })
+            } catch { /* ignore */ }
+          }
+          return fetched
+        } catch { return [] }
+      }))
+
+      for (const batch of dirResults) {
+        for (const file of batch) {
+          if (files.length >= MAX_FILES) break
+          files.push(file)
+        }
+        if (files.length >= MAX_FILES) break
+      }
+
       return files
-    } catch { return [] }
+    } catch { return files }
   }
 
   const fetchRepoContent = async (repoUrl: string): Promise<{ body: string | null; skillFileContent: string | null; extraFiles: RepoFile[] }> => {
@@ -334,11 +383,10 @@ export default function Home() {
       const gh = data.github
       const repoPath = repoUrl.match(/github\.com\/([^/]+\/[^/\s?#]+)/)?.[1]?.replace(/\.git$/, '')
 
-      // Fetch supporting folders in parallel
+      // Fetch all supporting files from repo tree
       let extraFiles: RepoFile[] = []
       if (repoPath) {
-        const folderResults = await Promise.all(SUPPORTING_FOLDERS.map(f => fetchFolderFiles(repoPath, f)))
-        extraFiles = folderResults.flat()
+        extraFiles = await fetchRepoTree(repoPath)
       }
 
       // If repo has .skill files, fetch their content
