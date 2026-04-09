@@ -143,47 +143,38 @@ async function fetchGoogleDoc(url: string) {
 }
 
 async function fetchNotion(url: string) {
-  // Extract page ID from URL (last 32-char hex string)
-  const idMatch = url.match(/([a-f0-9]{32})/)
-  if (!idMatch) throw new Error('Could not parse Notion page ID')
-  const pageId = idMatch[1]
-
-  // Use Notion's unofficial public page API (no key needed for public pages)
-  const res = await fetch(`https://notion.so/api/v3/loadPageChunk`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      pageId: `${pageId.slice(0,8)}-${pageId.slice(8,12)}-${pageId.slice(12,16)}-${pageId.slice(16,20)}-${pageId.slice(20)}`,
-      limit: 100,
-      cursor: { stack: [] },
-      chunkNumber: 0,
-      verticalColumns: false,
-    }),
-  })
-
-  if (!res.ok) throw new Error('Could not fetch Notion page')
-  const data = await res.json()
-
-  // Extract text from all blocks
-  const blocks = data?.recordMap?.block || {}
-  const texts: string[] = []
-  for (const block of Object.values(blocks) as any[]) {
-    const value = block?.value
-    if (!value) continue
-    const titleArr = value?.properties?.title
-    if (titleArr) {
-      const text = titleArr.map((t: any[]) => t[0]).join('')
-      if (text.trim()) texts.push(text.trim())
+  if (!APIFY_TOKEN) throw new Error('APIFY_API_TOKEN not set')
+  const runRes = await fetch(
+    `https://api.apify.com/v2/acts/apify~web-scraper/runs?token=${APIFY_TOKEN}`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        startUrls: [{ url }],
+        pageFunction: `async function pageFunction(context) {
+          const { page } = context
+          await page.waitForTimeout(3000)
+          const text = await page.evaluate(() => document.body.innerText)
+          return { text: text.slice(0, 10000) }
+        }`,
+        maxPagesPerCrawl: 1,
+      }),
     }
-  }
-
-  const transcript = texts.join('\n').slice(0, 10000)
-  if (transcript.length < 50) throw new Error('Notion page appears empty or private')
-
+  )
+  if (!runRes.ok) throw new Error('Apify Notion run failed')
+  const runData = await runRes.json()
+  const runId = runData?.data?.id
+  if (!runId) throw new Error('No run ID returned')
+  const succeeded = await pollApifyRun(runId, 120000)
+  if (!succeeded) throw new Error('Apify run did not succeed in time')
+  const datasetRes = await fetch(`https://api.apify.com/v2/actor-runs/${runId}/dataset/items?token=${APIFY_TOKEN}`)
+  const items = await datasetRes.json()
+  const text = items?.[0]?.text
+  if (!text || text.length < 50) throw new Error('Notion page appears empty or private')
   return {
     author: 'Notion',
     caption: 'Notion Page',
-    transcript,
+    transcript: text,
     thumbnail: null,
     source: 'article' as SourceType,
   }
