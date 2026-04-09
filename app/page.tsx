@@ -314,6 +314,23 @@ export default function Home() {
     downloadSkillZip(slug, skillContent, prompt)
   }
 
+  const downloadGroupSkill = (group: SkillGroup) => {
+    const slug = group.skillName.toLowerCase().replace(/\s+/g, '-')
+    const yamlName = sanitizeYamlName(slug)
+    // Deduplicated key steps across all scans
+    const allSteps = new Set<string>()
+    group.scans.forEach(s => (s.key_steps || []).forEach((step: string) => allSteps.add(step)))
+    const steps = Array.from(allSteps)
+    const repos = group.repos.map(r => r.repo).sort((a, b) => b.trustScore - a.trustScore)
+    const reposSection = repos.length > 0
+      ? `\n## Recommended Repos\n${repos.map(r => `- [${r.fullName}](${r.url}) — trust score: ${r.trustScore}`).join('\n')}\n`
+      : ''
+    const sourcesSection = `\n## Sources\n${group.scans.map(s => `- ${s.url}`).join('\n')}\n`
+    const skillContent = `---\nname: ${yamlName}\ndescription: Use this skill when working on ${group.category} tasks with Claude.\n---\n\n# ${group.skillName}\n\n${group.summary}\n${reposSection}\n## Key Steps\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n${sourcesSection}`
+    const prompt = `I've just installed the ${group.skillName} skill. Here's what it does:\n\n${group.summary}\n\nKey capabilities:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
+    downloadSkillZip(slug, skillContent, prompt)
+  }
+
   const getOverlaps = () => {
     const repoMap: Record<string, { repo: GithubRepo; urls: string[] }> = {}
     batchResults.forEach(r => { if (r.status === 'done' && r.githubRepos) r.githubRepos.forEach(gh => { if (!repoMap[gh.fullName]) repoMap[gh.fullName] = { repo: gh, urls: [] }; repoMap[gh.fullName].urls.push(r.url) }) })
@@ -686,14 +703,12 @@ export default function Home() {
                         <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
                         <span className="repo-source">via {source}</span>
                         <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
-                        <button onClick={() => downloadFromScan(group.scans[0], gh)} className="download-btn-inline">.skill ↓</button>
+                        <button onClick={() => downloadFromScan(group.scans[0], gh)} className="download-btn-secondary">this repo only ↓</button>
                       </div>
                     ))}
                   </div>
                 )}
-                {group.repos.length === 0 && (
-                  <button onClick={() => downloadFromScan(group.scans[0])} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download .skill ↓</button>
-                )}
+                <button onClick={() => downloadGroupSkill(group)} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download combined .skill ↓</button>
 
                 <button className="sources-toggle" onClick={() => toggleGroup(group.key)}>
                   {expandedGroups.has(group.key) ? '▾' : '▸'} Sources ({group.scans.length})
@@ -803,6 +818,8 @@ export default function Home() {
         .repo-source { font-size: 10px; color: var(--text-dim); font-style: italic; flex-shrink: 0; }
         .download-btn-inline { background: none; border: 1px solid var(--border); padding: 2px 8px; font-family: var(--font-body); font-size: 10px; color: var(--text-muted); cursor: pointer; border-radius: 3px; transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
         .download-btn-inline:hover { border-color: var(--border-dark); color: var(--text); background: var(--bg-2); }
+        .download-btn-secondary { background: none; border: none; padding: 2px 4px; font-family: var(--font-body); font-size: 10px; color: var(--text-dim); cursor: pointer; transition: color 0.15s; white-space: nowrap; flex-shrink: 0; }
+        .download-btn-secondary:hover { color: var(--text-muted); text-decoration: underline; text-underline-offset: 2px; }
         .mini-trust { font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 100px; border: 1px solid; }
 
         .overlaps-box { padding: 14px 18px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 3px; margin-bottom: 16px; }
