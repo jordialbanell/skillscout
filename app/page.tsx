@@ -96,6 +96,7 @@ export default function Home() {
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [dupScan, setDupScan] = useState<ScanRecord | null>(null)
   const [rescanningId, setRescanningId] = useState<string | null>(null)
+  const [rescanLabel, setRescanLabel] = useState<Record<string, string>>({})
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -308,6 +309,17 @@ export default function Home() {
     }, 2500)
     return () => clearInterval(timer)
   }, [isLoading])
+
+  useEffect(() => {
+    if (!rescanningId) { setRescanLabel({}); return }
+    let idx = 0
+    setRescanLabel({ [rescanningId]: STREAMING_MESSAGES[0] })
+    const timer = setInterval(() => {
+      idx = Math.min(idx + 1, STREAMING_MESSAGES.length - 1)
+      setRescanLabel(prev => ({ ...prev, [rescanningId]: STREAMING_MESSAGES[idx] }))
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [rescanningId])
 
   const overlaps = batchMode ? getOverlaps() : []
   const historyOverlaps = getHistoryOverlaps()
@@ -581,6 +593,11 @@ export default function Home() {
                 <h3 className="history-skill-name">{scan.skill_name}</h3>
                 <p className="history-summary">{scan.summary}</p>
                 <p className="history-url">{scan.url.replace('https://', '').slice(0, 65)}</p>
+                {rescanningId === scan.id && rescanLabel[scan.id] && (
+                  <div className="rescan-status">
+                    <span className="stage-dot-pulse" />{rescanLabel[scan.id]}
+                  </div>
+                )}
                 {scan.github_repos?.length > 0 && (
                   <div className="history-repos">
                     {Array.from(new Map(scan.github_repos.map((g: GithubRepo) => [g.fullName, g])).values()).slice(0, 3).map((gh, j) => (
@@ -742,7 +759,8 @@ export default function Home() {
         .rescan-btn { background: none; border: none; padding: 4px 6px; font-size: 13px; color: var(--text-dim); cursor: pointer; border-radius: 2px; transition: all 0.15s; line-height: 1; }
         .rescan-btn:hover { background: var(--bg-3); color: var(--text); }
         .rescan-btn:disabled { opacity: 0.6; cursor: not-allowed; animation: spin 1s linear infinite; }
-        .history-item.rescanning { opacity: 0.55; pointer-events: none; position: relative; }
+        .history-item.rescanning { pointer-events: none; position: relative; }
+        .rescan-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-muted); padding: 8px 0 4px; font-weight: 400; }
         @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .delete-btn { background: none; border: none; padding: 4px 6px; font-size: 11px; color: var(--text-dim); cursor: pointer; border-radius: 2px; transition: all 0.15s; line-height: 1; }
         .delete-btn:hover { background: var(--red-bg); color: var(--red); }
