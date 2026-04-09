@@ -97,6 +97,7 @@ export default function Home() {
   const [dupScan, setDupScan] = useState<ScanRecord | null>(null)
   const [rescanningId, setRescanningId] = useState<string | null>(null)
   const [rescanLabel, setRescanLabel] = useState<Record<string, string>>({})
+  const [historyFilter, setHistoryFilter] = useState('all')
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -274,13 +275,29 @@ export default function Home() {
     setStage('done')
   }
 
-  const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
-    const content = `---\nname: ${an.skillName.toLowerCase().replace(/\s+/g, '-')}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n# ${an.skillName}\n\n${an.summary}\n\n## Source\n- GitHub: ${gh.url}\n\n## Key Steps\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n`
+  const triggerDownload = (content: string, filename: string) => {
     const blob = new Blob([content], { type: 'text/plain' })
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `${an.skillName.toLowerCase().replace(/\s+/g, '-')}.skill`
+    a.download = filename
     a.click()
+  }
+
+  const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
+    const slug = an.skillName.toLowerCase().replace(/\s+/g, '-')
+    const skillContent = `---\nname: ${slug}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n# ${an.skillName}\n\n${an.summary}\n\n## Source\n- GitHub: ${gh.url}\n\n## Key Steps\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n`
+    triggerDownload(skillContent, `${slug}.skill`)
+    const prompt = `I've just installed the ${an.skillName} skill. Here's what it does:\n\n${an.summary}\n\nKey capabilities:\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
+    setTimeout(() => triggerDownload(prompt, 'how-to-use.txt'), 500)
+  }
+
+  const downloadFromScan = (scan: ScanRecord) => {
+    const slug = scan.skill_name.toLowerCase().replace(/\s+/g, '-')
+    const ghUrl = scan.github_repos?.[0]?.url || scan.url
+    const skillContent = `---\nname: ${slug}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n# ${scan.skill_name}\n\n${scan.summary}\n\n## Source\n- ${ghUrl}\n\n## Key Steps\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n`
+    triggerDownload(skillContent, `${slug}.skill`)
+    const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
+    setTimeout(() => triggerDownload(prompt, 'how-to-use.txt'), 500)
   }
 
   const getOverlaps = () => {
@@ -562,11 +579,22 @@ export default function Home() {
             </div>
           )}
 
+          {!historyLoading && history.length > 0 && (
+            <div className="filter-bar">
+              <button className={`filter-pill ${historyFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryFilter('all')}>All</button>
+              {Array.from(new Set(history.map(s => s.category))).sort().map(cat => (
+                <button key={cat} className={`filter-pill ${historyFilter === cat ? 'active' : ''}`} onClick={() => setHistoryFilter(cat)}>
+                  {CATEGORY_ICONS[cat] || '🧩'} {cat}
+                </button>
+              ))}
+            </div>
+          )}
+
           {historyLoading && <p className="loading-msg">Loading…</p>}
           {!historyLoading && history.length === 0 && <p className="empty-msg">No scans yet.</p>}
 
           <div className="history-list">
-            {history.map((scan) => (
+            {history.filter(s => historyFilter === 'all' || s.category === historyFilter).map((scan) => (
               <div key={scan.id} className={`history-item ${rescanningId === scan.id ? 'rescanning' : ''}`}>
                 <div className="history-item-header">
                   <span className="pill">{CATEGORY_ICONS[scan.category] || '🧩'} {scan.category}</span>
@@ -608,6 +636,7 @@ export default function Home() {
                     ))}
                   </div>
                 )}
+                <button onClick={() => downloadFromScan(scan)} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download .skill ↓</button>
               </div>
             ))}
           </div>
@@ -748,8 +777,12 @@ export default function Home() {
 
         /* History */
         .history-section { margin-top: 32px; }
-        .history-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 24px; }
+        .history-header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 16px; }
         .history-title { font-family: var(--font-display); font-size: 26px; font-weight: 500; letter-spacing: -0.4px; }
+        .filter-bar { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+        .filter-pill { background: var(--bg-2); border: 1px solid var(--border); padding: 4px 12px; font-family: var(--font-body); font-size: 12px; color: var(--text-muted); cursor: pointer; border-radius: 100px; transition: all 0.15s; }
+        .filter-pill:hover { border-color: var(--border-dark); color: var(--text); }
+        .filter-pill.active { background: var(--text); color: var(--bg); border-color: var(--text); }
         .loading-msg, .empty-msg { font-size: 14px; color: var(--text-muted); font-weight: 300; padding: 32px 0; }
         .history-list { display: flex; flex-direction: column; }
         .history-item { padding: 20px 0; border-bottom: 1px solid var(--border); }
