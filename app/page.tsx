@@ -289,7 +289,7 @@ export default function Home() {
     const skillContent = `---\nname: ${slug}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n# ${an.skillName}\n\n${an.summary}\n\n## Source\n- GitHub: ${gh.url}\n\n## Key Steps\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n`
     triggerDownload(skillContent, `${slug}.skill`)
     const prompt = `I've just installed the ${an.skillName} skill. Here's what it does:\n\n${an.summary}\n\nKey capabilities:\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    setTimeout(() => triggerDownload(prompt, 'how-to-use.txt'), 500)
+    setTimeout(() => triggerDownload(prompt, `${slug}-prompt.txt`), 500)
   }
 
   const downloadFromScan = (scan: ScanRecord, repo?: GithubRepo) => {
@@ -298,7 +298,7 @@ export default function Home() {
     const skillContent = `---\nname: ${slug}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n# ${scan.skill_name}\n\n${scan.summary}\n\n## Source\n- ${ghUrl}\n\n## Key Steps\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n`
     triggerDownload(skillContent, `${slug}.skill`)
     const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    setTimeout(() => triggerDownload(prompt, 'how-to-use.txt'), 500)
+    setTimeout(() => triggerDownload(prompt, `${slug}-prompt.txt`), 500)
   }
 
   const getOverlaps = () => {
