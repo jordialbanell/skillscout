@@ -2,12 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const APIFY_TOKEN = process.env.APIFY_API_TOKEN
 
-type SourceType = 'instagram' | 'tiktok' | 'article' | 'googledoc' | 'unknown'
+type SourceType = 'instagram' | 'tiktok' | 'article' | 'googledoc' | 'notion' | 'unknown'
 
 function detectSource(url: string): SourceType {
   if (url.includes('instagram.com')) return 'instagram'
   if (url.includes('tiktok.com') || url.includes('vm.tiktok.com')) return 'tiktok'
   if (url.includes('docs.google.com/document')) return 'googledoc'
+  if (url.includes('notion.so') || url.includes('notion.site')) return 'notion'
   if (url.startsWith('http')) return 'article'
   return 'unknown'
 }
@@ -141,6 +142,53 @@ async function fetchGoogleDoc(url: string) {
   }
 }
 
+async function fetchNotion(url: string) {
+  // Extract page ID from URL (last 32-char hex string)
+  const idMatch = url.match(/([a-f0-9]{32})/)
+  if (!idMatch) throw new Error('Could not parse Notion page ID')
+  const pageId = idMatch[1]
+
+  // Use Notion's unofficial public page API (no key needed for public pages)
+  const res = await fetch(`https://notion.so/api/v3/loadPageChunk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      pageId: `${pageId.slice(0,8)}-${pageId.slice(8,12)}-${pageId.slice(12,16)}-${pageId.slice(16,20)}-${pageId.slice(20)}`,
+      limit: 100,
+      cursor: { stack: [] },
+      chunkNumber: 0,
+      verticalColumns: false,
+    }),
+  })
+
+  if (!res.ok) throw new Error('Could not fetch Notion page')
+  const data = await res.json()
+
+  // Extract text from all blocks
+  const blocks = data?.recordMap?.block || {}
+  const texts: string[] = []
+  for (const block of Object.values(blocks) as any[]) {
+    const value = block?.value
+    if (!value) continue
+    const titleArr = value?.properties?.title
+    if (titleArr) {
+      const text = titleArr.map((t: any[]) => t[0]).join('')
+      if (text.trim()) texts.push(text.trim())
+    }
+  }
+
+  const transcript = texts.join('\n').slice(0, 10000)
+  if (transcript.length < 50) throw new Error('Notion page appears empty or private')
+
+  return {
+    author: 'Notion',
+    caption: 'Notion Page',
+    transcript,
+    thumbnail: null,
+    source: 'article' as SourceType,
+  }
+}
+
 async function fetchArticle(url: string) {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SkillScout/1.0)' },
@@ -169,6 +217,7 @@ export async function POST(req: NextRequest) {
     if (source === 'instagram') data = await fetchInstagram(url)
     else if (source === 'tiktok') data = await fetchTikTok(url)
     else if (source === 'googledoc') data = await fetchGoogleDoc(url)
+    else if (source === 'notion') data = await fetchNotion(url)
     else data = await fetchArticle(url)
     return NextResponse.json({ success: true, data })
   } catch (err: unknown) {
