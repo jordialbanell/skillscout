@@ -287,10 +287,16 @@ export default function Home() {
 
   const sanitizeSlug = (s: string) => s.replace(/[^a-z0-9-]/gi, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '') || s
 
-  const downloadSkillZip = async (slug: string, skillContent: string, promptContent: string) => {
+  interface RepoFile { path: string; content: string }
+
+  const downloadSkillZip = async (slug: string, skillContent: string, promptContent: string, extraFiles: RepoFile[] = []) => {
     const cleanSlug = sanitizeSlug(slug)
     const zip = new JSZip()
-    zip.folder(cleanSlug)!.file('SKILL.md', skillContent)
+    const folder = zip.folder(cleanSlug)!
+    folder.file('SKILL.md', skillContent)
+    for (const file of extraFiles) {
+      folder.file(file.path, file.content)
+    }
     const blob = await zip.generateAsync({ type: 'blob' })
     triggerDownload(blob, `${cleanSlug}.zip`)
     setTimeout(() => triggerDownload(new Blob([promptContent], { type: 'text/plain' }), `${cleanSlug}-prompt.txt`), 500)
@@ -298,37 +304,65 @@ export default function Home() {
 
   const sanitizeYamlName = (slug: string) => sanitizeSlug(slug.replace(/claude-?/gi, '')).replace(/^-|-$/g, '') || slug
 
-  const fetchRepoContent = async (repoUrl: string): Promise<{ body: string | null; skillFileContent: string | null }> => {
+  const SUPPORTING_FOLDERS = ['references', 'scripts', 'assets', 'examples', 'templates', 'docs']
+
+  const fetchFolderFiles = async (repoPath: string, folderName: string): Promise<RepoFile[]> => {
+    try {
+      const res = await fetch(`https://api.github.com/repos/${repoPath}/contents/${folderName}`, {
+        headers: { 'User-Agent': 'SkillScout/1.0' },
+      })
+      if (!res.ok) return []
+      const items = await res.json()
+      if (!Array.isArray(items)) return []
+      const files: RepoFile[] = []
+      for (const item of items.filter((f: { type: string; name: string }) => f.type === 'file').slice(0, 20)) {
+        try {
+          const fileRes = await fetch(item.download_url)
+          if (fileRes.ok) files.push({ path: `${folderName}/${item.name}`, content: await fileRes.text() })
+        } catch { /* ignore */ }
+      }
+      return files
+    } catch { return [] }
+  }
+
+  const fetchRepoContent = async (repoUrl: string): Promise<{ body: string | null; skillFileContent: string | null; extraFiles: RepoFile[] }> => {
+    const empty = { body: null, skillFileContent: null, extraFiles: [] as RepoFile[] }
     try {
       const res = await fetch('/api/github', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: repoUrl }) })
       const data = await res.json()
-      if (!data.success) return { body: null, skillFileContent: null }
+      if (!data.success) return empty
       const gh = data.github
+      const repoPath = repoUrl.match(/github\.com\/([^/]+\/[^/\s?#]+)/)?.[1]?.replace(/\.git$/, '')
+
+      // Fetch supporting folders in parallel
+      let extraFiles: RepoFile[] = []
+      if (repoPath) {
+        const folderResults = await Promise.all(SUPPORTING_FOLDERS.map(f => fetchFolderFiles(repoPath, f)))
+        extraFiles = folderResults.flat()
+      }
+
       // If repo has .skill files, fetch their content
-      if (gh.skillFiles?.length > 0) {
-        const repoPath = repoUrl.match(/github\.com\/([^/]+\/[^/\s?#]+)/)?.[1]
-        if (repoPath) {
-          const contents: string[] = []
-          for (const filePath of gh.skillFiles.slice(0, 3)) {
-            try {
-              const fileRes = await fetch(`https://raw.githubusercontent.com/${repoPath}/main/${filePath}`)
-              if (fileRes.ok) contents.push(await fileRes.text())
-            } catch { /* ignore */ }
-          }
-          if (contents.length > 0) return { body: null, skillFileContent: contents.join('\n\n') }
+      if (gh.skillFiles?.length > 0 && repoPath) {
+        const contents: string[] = []
+        for (const filePath of gh.skillFiles.slice(0, 3)) {
+          try {
+            const fileRes = await fetch(`https://raw.githubusercontent.com/${repoPath}/main/${filePath}`)
+            if (fileRes.ok) contents.push(await fileRes.text())
+          } catch { /* ignore */ }
         }
+        if (contents.length > 0) return { body: null, skillFileContent: contents.join('\n\n'), extraFiles }
       }
       // Fall back to README
-      if (gh.readmeContent && gh.readmeContent.length > 100) return { body: gh.readmeContent, skillFileContent: null }
-      return { body: null, skillFileContent: null }
-    } catch { return { body: null, skillFileContent: null } }
+      if (gh.readmeContent && gh.readmeContent.length > 100) return { body: gh.readmeContent, skillFileContent: null, extraFiles }
+      return { ...empty, extraFiles }
+    } catch { return empty }
   }
 
   const downloadSkillFile = async (gh: GithubRepo, an: Analysis, btnId: string) => {
     setDownloadingId(btnId)
     const slug = an.skillName.toLowerCase().replace(/\s+/g, '-')
     const yamlName = sanitizeYamlName(slug)
-    const { body: readmeBody, skillFileContent } = await fetchRepoContent(gh.url)
+    const { body: readmeBody, skillFileContent, extraFiles } = await fetchRepoContent(gh.url)
     let bodyContent: string
     if (skillFileContent) bodyContent = skillFileContent
     else if (readmeBody) bodyContent = `# ${an.skillName}\n\n${readmeBody}`
@@ -337,7 +371,7 @@ export default function Home() {
       ? skillFileContent
       : `---\nname: ${yamlName}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n${bodyContent}\n`
     const prompt = `I've just installed the ${an.skillName} skill. Here's what it does:\n\n${an.summary}\n\nKey capabilities:\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    await downloadSkillZip(slug, skillContent, prompt)
+    await downloadSkillZip(slug, skillContent, prompt, extraFiles)
     setDownloadingId(null)
   }
 
@@ -346,7 +380,7 @@ export default function Home() {
     const slug = scan.skill_name.toLowerCase().replace(/\s+/g, '-')
     const yamlName = sanitizeYamlName(slug)
     const ghUrl = repo?.url || scan.github_repos?.[0]?.url || scan.url
-    const { body: readmeBody, skillFileContent } = ghUrl.includes('github.com') ? await fetchRepoContent(ghUrl) : { body: null, skillFileContent: null }
+    const { body: readmeBody, skillFileContent, extraFiles } = ghUrl.includes('github.com') ? await fetchRepoContent(ghUrl) : { body: null, skillFileContent: null, extraFiles: [] as RepoFile[] }
     let bodyContent: string
     if (skillFileContent) bodyContent = skillFileContent
     else if (readmeBody) bodyContent = `# ${scan.skill_name}\n\n${readmeBody}`
@@ -355,7 +389,7 @@ export default function Home() {
       ? skillFileContent
       : `---\nname: ${yamlName}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n${bodyContent}\n`
     const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    await downloadSkillZip(slug, skillContent, prompt)
+    await downloadSkillZip(slug, skillContent, prompt, extraFiles)
     if (btnId) setDownloadingId(null)
   }
 
@@ -369,10 +403,12 @@ export default function Home() {
     const repos = group.repos.map(r => r.repo).sort((a, b) => b.trustScore - a.trustScore)
     // Fetch content from the highest-trust repo
     let fetchedBody = ''
+    let extraFiles: RepoFile[] = []
     if (repos.length > 0) {
-      const { body: readmeBody, skillFileContent } = await fetchRepoContent(repos[0].url)
-      if (skillFileContent) fetchedBody = skillFileContent
-      else if (readmeBody) fetchedBody = readmeBody
+      const fetched = await fetchRepoContent(repos[0].url)
+      if (fetched.skillFileContent) fetchedBody = fetched.skillFileContent
+      else if (fetched.body) fetchedBody = fetched.body
+      extraFiles = fetched.extraFiles
     }
     const reposSection = repos.length > 0
       ? `\n## Recommended Repos\n${repos.map(r => `- [${r.fullName}](${r.url}) — trust score: ${r.trustScore}`).join('\n')}\n`
@@ -381,7 +417,7 @@ export default function Home() {
     const mainBody = fetchedBody || `${group.summary}\n\n## Key Steps\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
     const skillContent = `---\nname: ${yamlName}\ndescription: Use this skill when working on ${group.category} tasks with Claude.\n---\n\n# ${group.skillName}\n\n${mainBody}\n${reposSection}${sourcesSection}`
     const prompt = `I've just installed the ${group.skillName} skill. Here's what it does:\n\n${group.summary}\n\nKey capabilities:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    await downloadSkillZip(slug, skillContent, prompt)
+    await downloadSkillZip(slug, skillContent, prompt, extraFiles)
     setDownloadingId(null)
   }
 
