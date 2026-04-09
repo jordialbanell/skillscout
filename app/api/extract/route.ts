@@ -2,13 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 
 const APIFY_TOKEN = process.env.APIFY_API_TOKEN
 
-type SourceType = 'instagram' | 'tiktok' | 'article' | 'googledoc' | 'notion' | 'unknown'
+type SourceType = 'instagram' | 'tiktok' | 'article' | 'googledoc' | 'notion' | 'github' | 'unknown'
 
 function detectSource(url: string): SourceType {
   if (url.includes('instagram.com')) return 'instagram'
   if (url.includes('tiktok.com') || url.includes('vm.tiktok.com')) return 'tiktok'
   if (url.includes('docs.google.com/document')) return 'googledoc'
   if (url.includes('notion.so') || url.includes('notion.site')) return 'notion'
+  if (url.includes('github.com')) return 'github'
   if (url.startsWith('http')) return 'article'
   return 'unknown'
 }
@@ -184,6 +185,59 @@ async function fetchNotion(url: string) {
   }
 }
 
+async function fetchGitHub(url: string) {
+  // Clean tracking params and extract owner/repo
+  const cleanUrl = url.split('?')[0].split('#')[0]
+  const match = cleanUrl.match(/github\.com\/([^/]+)\/([^/]+)/)
+  if (!match) throw new Error('Could not parse GitHub repo URL')
+  const owner = match[1]
+  const repo = match[2]
+
+  // Fetch repo metadata
+  const repoRes = await fetch(`https://api.github.com/repos/${owner}/${repo}`, {
+    headers: { 'User-Agent': 'SkillScout/1.0' },
+  })
+  if (!repoRes.ok) throw new Error('Could not fetch GitHub repo — it may be private or not exist')
+  const repoData = await repoRes.json()
+
+  // Fetch README
+  let readme = ''
+  const readmeRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/readme`, {
+    headers: { 'User-Agent': 'SkillScout/1.0', 'Accept': 'application/vnd.github.raw' },
+  })
+  if (readmeRes.ok) readme = await readmeRes.text()
+
+  // Fetch .skill files from repo root
+  let skillContent = ''
+  const contentsRes = await fetch(`https://api.github.com/repos/${owner}/${repo}/contents`, {
+    headers: { 'User-Agent': 'SkillScout/1.0' },
+  })
+  if (contentsRes.ok) {
+    const contents = await contentsRes.json()
+    const skillFiles = contents.filter((f: { name: string }) => f.name.endsWith('.skill') || f.name.endsWith('.md'))
+    for (const file of skillFiles.slice(0, 3)) {
+      const fileRes = await fetch(file.download_url, { headers: { 'User-Agent': 'SkillScout/1.0' } })
+      if (fileRes.ok) skillContent += await fileRes.text() + '\n\n'
+    }
+  }
+
+  const transcript = [
+    `Repo: ${repoData.full_name}`,
+    `Description: ${repoData.description || 'No description'}`,
+    `Stars: ${repoData.stargazers_count}`,
+    `README:\n${readme}`,
+    skillContent ? `Skill files:\n${skillContent}` : '',
+  ].join('\n').slice(0, 10000)
+
+  return {
+    author: owner,
+    caption: repoData.description || repo,
+    transcript,
+    thumbnail: null,
+    source: 'article' as SourceType,
+  }
+}
+
 async function fetchArticle(url: string) {
   const res = await fetch(url, {
     headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SkillScout/1.0)' },
@@ -213,6 +267,7 @@ export async function POST(req: NextRequest) {
     else if (source === 'tiktok') data = await fetchTikTok(url)
     else if (source === 'googledoc') data = await fetchGoogleDoc(url)
     else if (source === 'notion') data = await fetchNotion(url)
+    else if (source === 'github') data = await fetchGitHub(url)
     else data = await fetchArticle(url)
     return NextResponse.json({ success: true, data })
   } catch (err: unknown) {
