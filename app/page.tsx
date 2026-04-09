@@ -291,9 +291,9 @@ export default function Home() {
     setTimeout(() => triggerDownload(prompt, 'how-to-use.txt'), 500)
   }
 
-  const downloadFromScan = (scan: ScanRecord) => {
+  const downloadFromScan = (scan: ScanRecord, repo?: GithubRepo) => {
     const slug = scan.skill_name.toLowerCase().replace(/\s+/g, '-')
-    const ghUrl = scan.github_repos?.[0]?.url || scan.url
+    const ghUrl = repo?.url || scan.github_repos?.[0]?.url || scan.url
     const skillContent = `---\nname: ${slug}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n# ${scan.skill_name}\n\n${scan.summary}\n\n## Source\n- ${ghUrl}\n\n## Key Steps\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n`
     triggerDownload(skillContent, `${slug}.skill`)
     const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
@@ -632,11 +632,16 @@ export default function Home() {
                       <div key={j} className="batch-repo">
                         <a href={(gh as GithubRepo).url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{(gh as GithubRepo).fullName}</a>
                         <span className={`mini-trust trust-${(gh as GithubRepo).trustLevel}`}>{(gh as GithubRepo).trustScore}</span>
+                        {scan.github_repos.length > 1 && (
+                          <button onClick={() => downloadFromScan(scan, gh as GithubRepo)} className="download-btn-inline">.skill ↓</button>
+                        )}
                       </div>
                     ))}
                   </div>
                 )}
-                <button onClick={() => downloadFromScan(scan)} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download .skill ↓</button>
+                {(!scan.github_repos || scan.github_repos.length <= 1) && (
+                  <button onClick={() => downloadFromScan(scan)} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download .skill ↓</button>
+                )}
               </div>
             ))}
           </div>
@@ -712,9 +717,11 @@ export default function Home() {
         .batch-skill { font-size: 13px; font-weight: 500; }
         .batch-error { font-size: 12px; color: var(--red); font-weight: 300; }
         .batch-repos { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; }
-        .batch-repo { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
-        .batch-repo-name { font-size: 12px; color: var(--text); text-decoration: none; }
+        .batch-repo { display: flex; align-items: center; gap: 8px; }
+        .batch-repo-name { font-size: 12px; color: var(--text); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .batch-repo-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+        .download-btn-inline { background: none; border: 1px solid var(--border); padding: 2px 8px; font-family: var(--font-body); font-size: 10px; color: var(--text-muted); cursor: pointer; border-radius: 3px; transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
+        .download-btn-inline:hover { border-color: var(--border-dark); color: var(--text); background: var(--bg-2); }
         .mini-trust { font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 100px; border: 1px solid; }
 
         .overlaps-box { padding: 14px 18px; background: var(--bg-3); border: 1px solid var(--border); border-radius: 3px; margin-bottom: 16px; }
