@@ -152,10 +152,8 @@ async function fetchNotion(url: string) {
       body: JSON.stringify({
         startUrls: [{ url }],
         pageFunction: `async function pageFunction(context) {
-          const { page } = context;
-          await page.waitForTimeout(3000);
-          const text = await page.evaluate(() => document.body.innerText);
-          return { text: text.slice(0, 10000) };
+          await context.waitFor(3000);
+          return { text: document.body.innerText.slice(0, 10000) };
         }`,
         maxPagesPerCrawl: 1,
         runMode: 'DEVELOPMENT',
