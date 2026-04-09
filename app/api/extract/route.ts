@@ -152,16 +152,21 @@ async function fetchNotion(url: string) {
       body: JSON.stringify({
         startUrls: [{ url }],
         pageFunction: `async function pageFunction(context) {
-          const { page } = context
-          await page.waitForTimeout(3000)
-          const text = await page.evaluate(() => document.body.innerText)
-          return { text: text.slice(0, 10000) }
+          const { page } = context;
+          await page.waitForTimeout(3000);
+          const text = await page.evaluate(() => document.body.innerText);
+          return { text: text.slice(0, 10000) };
         }`,
         maxPagesPerCrawl: 1,
+        runMode: 'DEVELOPMENT',
       }),
     }
   )
-  if (!runRes.ok) throw new Error('Apify Notion run failed')
+  if (!runRes.ok) {
+    const errBody = await runRes.text()
+    console.error('Apify Notion run failed:', errBody)
+    throw new Error(`Apify Notion run failed: ${errBody}`)
+  }
   const runData = await runRes.json()
   const runId = runData?.data?.id
   if (!runId) throw new Error('No run ID returned')

@@ -87,6 +87,7 @@ export default function Home() {
   const [githubResults, setGithubResults] = useState<GithubRepo[]>([])
   const [similarityResults, setSimilarityResults] = useState<SimilarityResult[]>([])
   const [stageLabel, setStageLabel] = useState('')
+  const [streamingLabel, setStreamingLabel] = useState('')
   const [batchMode, setBatchMode] = useState(false)
   const [batchResults, setBatchResults] = useState<BatchResult[]>([])
   const [batchRunning, setBatchRunning] = useState(false)
@@ -96,6 +97,19 @@ export default function Home() {
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
+
+  const STREAMING_MESSAGES = ['Fetching page...', 'Rendering content...', 'Extracting skills...', 'Analysing with Claude...']
+
+  useEffect(() => {
+    if (!isLoading) { setStreamingLabel(''); return }
+    let idx = 0
+    setStreamingLabel(STREAMING_MESSAGES[0])
+    const timer = setInterval(() => {
+      idx = Math.min(idx + 1, STREAMING_MESSAGES.length - 1)
+      setStreamingLabel(STREAMING_MESSAGES[idx])
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [isLoading])
 
   useEffect(() => { if (tab === 'history') loadHistory() }, [tab])
 
@@ -308,7 +322,7 @@ export default function Home() {
           {/* Progress */}
           {isLoading && (
             <div className="stage-status animate-fade-in">
-              <span className="stage-dot-pulse" />{stageLabel}
+              <span className="stage-dot-pulse" />{streamingLabel || stageLabel}
             </div>
           )}
 
