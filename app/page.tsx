@@ -98,19 +98,6 @@ export default function Home() {
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
 
-  const STREAMING_MESSAGES = ['Fetching page...', 'Rendering content...', 'Extracting skills...', 'Analysing with Claude...']
-
-  useEffect(() => {
-    if (!isLoading) { setStreamingLabel(''); return }
-    let idx = 0
-    setStreamingLabel(STREAMING_MESSAGES[0])
-    const timer = setInterval(() => {
-      idx = Math.min(idx + 1, STREAMING_MESSAGES.length - 1)
-      setStreamingLabel(STREAMING_MESSAGES[idx])
-    }, 2500)
-    return () => clearInterval(timer)
-  }, [isLoading])
-
   useEffect(() => { if (tab === 'history') loadHistory() }, [tab])
 
   const loadHistory = async () => {
@@ -266,6 +253,20 @@ export default function Home() {
   }
 
   const isLoading = ['extracting', 'analyzing', 'github', 'similarity'].includes(stage)
+
+  const STREAMING_MESSAGES = ['Fetching page...', 'Rendering content...', 'Extracting skills...', 'Analysing with Claude...']
+
+  useEffect(() => {
+    if (!isLoading) { setStreamingLabel(''); return }
+    let idx = 0
+    setStreamingLabel(STREAMING_MESSAGES[0])
+    const timer = setInterval(() => {
+      idx = Math.min(idx + 1, STREAMING_MESSAGES.length - 1)
+      setStreamingLabel(STREAMING_MESSAGES[idx])
+    }, 2500)
+    return () => clearInterval(timer)
+  }, [isLoading])
+
   const overlaps = batchMode ? getOverlaps() : []
   const historyOverlaps = getHistoryOverlaps()
 
