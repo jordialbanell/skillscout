@@ -284,15 +284,18 @@ export default function Home() {
     a.click()
   }
 
+  const sanitizeSlug = (s: string) => s.replace(/[^a-z0-9-]/gi, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '') || s
+
   const downloadSkillZip = async (slug: string, skillContent: string, promptContent: string) => {
+    const cleanSlug = sanitizeSlug(slug)
     const zip = new JSZip()
-    zip.folder(slug)!.file('SKILL.md', skillContent)
+    zip.folder(cleanSlug)!.file('SKILL.md', skillContent)
     const blob = await zip.generateAsync({ type: 'blob' })
-    triggerDownload(blob, `${slug}.zip`)
-    setTimeout(() => triggerDownload(new Blob([promptContent], { type: 'text/plain' }), `${slug}-prompt.txt`), 500)
+    triggerDownload(blob, `${cleanSlug}.zip`)
+    setTimeout(() => triggerDownload(new Blob([promptContent], { type: 'text/plain' }), `${cleanSlug}-prompt.txt`), 500)
   }
 
-  const sanitizeYamlName = (slug: string) => slug.replace(/claude-?/gi, '').replace(/-{2,}/g, '-').replace(/^-|-$/g, '').trim() || slug
+  const sanitizeYamlName = (slug: string) => sanitizeSlug(slug.replace(/claude-?/gi, '')).replace(/^-|-$/g, '') || slug
 
   const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
     const slug = an.skillName.toLowerCase().replace(/\s+/g, '-')
