@@ -95,6 +95,7 @@ export default function Home() {
   const [historyLoading, setHistoryLoading] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [dupScan, setDupScan] = useState<ScanRecord | null>(null)
+  const [rescanningId, setRescanningId] = useState<string | null>(null)
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -118,6 +119,25 @@ export default function Home() {
       setHistory(h => h.filter(s => s.id !== id))
     } catch { /* ignore */ }
     setDeletingId(null)
+  }
+
+  const rescan = async (scan: ScanRecord) => {
+    setRescanningId(scan.id)
+    try {
+      const { extracted, analysis, githubRepos } = await processSingleUrl(scan.url)
+      await fetch('/api/scans', {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          id: scan.id, source: extracted.source, author: extracted.author,
+          skill_name: analysis.skillName, category: analysis.skillCategory,
+          summary: analysis.summary, key_steps: analysis.keySteps,
+          github_repos: githubRepos.map(g => ({ fullName: g.fullName, url: g.url, stars: g.stars, trustScore: g.trustScore, trustLevel: g.trustLevel, description: g.description, skillFiles: g.skillFiles, matchedQuery: g.matchedQuery })),
+          search_terms: analysis.githubSearchTerms || [],
+        }),
+      })
+      await loadHistory()
+    } catch { /* ignore */ }
+    setRescanningId(null)
   }
 
   const saveScan = async (url: string, extracted: ExtractedData, analysis: Analysis, githubRepos: GithubRepo[]) => {
@@ -535,11 +555,19 @@ export default function Home() {
 
           <div className="history-list">
             {history.map((scan) => (
-              <div key={scan.id} className="history-item">
+              <div key={scan.id} className={`history-item ${rescanningId === scan.id ? 'rescanning' : ''}`}>
                 <div className="history-item-header">
                   <span className="pill">{CATEGORY_ICONS[scan.category] || '🧩'} {scan.category}</span>
                   <div className="history-item-actions">
                     <span className="history-date">{new Date(scan.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
+                    <button
+                      onClick={() => rescan(scan)}
+                      disabled={rescanningId === scan.id}
+                      className="rescan-btn"
+                      title="Re-scan"
+                    >
+                      {rescanningId === scan.id ? '⟳' : '↻'}
+                    </button>
                     <button
                       onClick={() => deleteScan(scan.id)}
                       disabled={deletingId === scan.id}
@@ -711,6 +739,11 @@ export default function Home() {
         .history-item-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
         .history-item-actions { display: flex; align-items: center; gap: 12px; }
         .history-date { font-size: 12px; color: var(--text-dim); font-family: var(--font-mono); }
+        .rescan-btn { background: none; border: none; padding: 4px 6px; font-size: 13px; color: var(--text-dim); cursor: pointer; border-radius: 2px; transition: all 0.15s; line-height: 1; }
+        .rescan-btn:hover { background: var(--bg-3); color: var(--text); }
+        .rescan-btn:disabled { opacity: 0.6; cursor: not-allowed; animation: spin 1s linear infinite; }
+        .history-item.rescanning { opacity: 0.55; pointer-events: none; position: relative; }
+        @keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
         .delete-btn { background: none; border: none; padding: 4px 6px; font-size: 11px; color: var(--text-dim); cursor: pointer; border-radius: 2px; transition: all 0.15s; line-height: 1; }
         .delete-btn:hover { background: var(--red-bg); color: var(--red); }
         .delete-btn:disabled { opacity: 0.4; cursor: not-allowed; }

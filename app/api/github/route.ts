@@ -83,34 +83,41 @@ export async function POST(req: NextRequest) {
     const signals: { label: string; positive: boolean }[] = []
 
     // Stars
-    if (repo.stargazers_count >= 100) { trustScore += 25; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
-    else if (repo.stargazers_count >= 20) { trustScore += 15; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
-    else if (repo.stargazers_count >= 5) { trustScore += 8; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
-    else { signals.push({ label: `${repo.stargazers_count} stars (low)`, positive: false }) }
+    if (repo.stargazers_count >= 500) { trustScore += 25; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
+    else if (repo.stargazers_count >= 100) { trustScore += 18; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
+    else if (repo.stargazers_count >= 20) { trustScore += 10; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
+    else if (repo.stargazers_count >= 5) { trustScore += 4; signals.push({ label: `${repo.stargazers_count} stars`, positive: true }) }
+    else { signals.push({ label: `${repo.stargazers_count} stars (very low)`, positive: false }) }
 
     // Recency
     const lastPush = new Date(repo.pushed_at)
     const daysSince = (Date.now() - lastPush.getTime()) / (1000 * 60 * 60 * 24)
-    if (daysSince < 30) { trustScore += 20; signals.push({ label: 'Updated recently', positive: true }) }
-    else if (daysSince < 180) { trustScore += 12; signals.push({ label: 'Updated within 6 months', positive: true }) }
-    else { signals.push({ label: `Last updated ${Math.round(daysSince / 30)} months ago`, positive: false }) }
+    if (daysSince < 14) { trustScore += 20; signals.push({ label: 'Updated in last 2 weeks', positive: true }) }
+    else if (daysSince < 60) { trustScore += 14; signals.push({ label: 'Updated within 2 months', positive: true }) }
+    else if (daysSince < 180) { trustScore += 8; signals.push({ label: 'Updated within 6 months', positive: true }) }
+    else if (daysSince < 365) { trustScore += 3; signals.push({ label: `Updated ${Math.round(daysSince / 30)} months ago`, positive: false }) }
+    else { signals.push({ label: `Last updated over a year ago`, positive: false }) }
 
     // Has skill files
-    if (allSkillFiles.length > 0) { trustScore += 30; signals.push({ label: `${allSkillFiles.length} skill file(s) found`, positive: true }) }
-    else if (hasSkillFile) { trustScore += 20; signals.push({ label: 'Skill structure detected', positive: true }) }
+    if (allSkillFiles.length >= 3) { trustScore += 30; signals.push({ label: `${allSkillFiles.length} skill files found`, positive: true }) }
+    else if (allSkillFiles.length >= 1) { trustScore += 20; signals.push({ label: `${allSkillFiles.length} skill file(s) found`, positive: true }) }
+    else if (hasSkillFile) { trustScore += 8; signals.push({ label: 'Skill structure detected', positive: true }) }
     else { signals.push({ label: 'No .skill files found', positive: false }) }
 
     // Has README
-    if (hasReadme) { trustScore += 10; signals.push({ label: 'Has README', positive: true }) }
+    if (hasReadme) { trustScore += 8; signals.push({ label: 'Has README', positive: true }) }
 
     // Not a fork
-    if (!repo.fork) { trustScore += 10; signals.push({ label: 'Original repo (not a fork)', positive: true }) }
+    if (!repo.fork) { trustScore += 7; signals.push({ label: 'Original repo (not a fork)', positive: true }) }
     else { signals.push({ label: 'Forked repo', positive: false }) }
 
     // Has description
-    if (repo.description) { trustScore += 5; signals.push({ label: 'Has description', positive: true }) }
+    if (repo.description) { trustScore += 3; signals.push({ label: 'Has description', positive: true }) }
 
-    const trustLevel = trustScore >= 60 ? 'high' : trustScore >= 35 ? 'medium' : 'low'
+    // Forks bonus
+    if (repo.forks_count >= 50) { trustScore += 7; signals.push({ label: `${repo.forks_count} forks (high adoption)`, positive: true }) }
+
+    const trustLevel = trustScore >= 70 ? 'high' : trustScore >= 40 ? 'medium' : 'low'
 
     return NextResponse.json({
       success: true,

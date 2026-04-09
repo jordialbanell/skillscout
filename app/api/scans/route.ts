@@ -48,6 +48,24 @@ export async function GET(req: NextRequest) {
   }
 }
 
+export async function PUT(req: NextRequest) {
+  try {
+    const { id, ...updates } = await req.json()
+    if (!id) return NextResponse.json({ error: 'id required' }, { status: 400 })
+    const { data, error } = await supabase
+      .from('scans')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single()
+    if (error) throw error
+    return NextResponse.json({ success: true, scan: data })
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : 'Unknown error'
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
+}
+
 export async function DELETE(req: NextRequest) {
   try {
     const { id } = await req.json()
