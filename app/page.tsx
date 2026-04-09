@@ -313,9 +313,10 @@ export default function Home() {
     return Object.values(repoMap).filter(o => o.count > 1)
   }
 
+  interface RepoWithSource { repo: GithubRepo; source: string }
   interface SkillGroup {
     key: string; skillName: string; category: string; summary: string
-    scans: ScanRecord[]; repos: GithubRepo[]
+    scans: ScanRecord[]; repos: RepoWithSource[]
   }
 
   const getSkillGroups = (): SkillGroup[] => {
@@ -361,13 +362,16 @@ export default function Home() {
       // Best summary (longest)
       const summary = scans.reduce((best, s) => s.summary.length > best.length ? s.summary : best, '')
 
-      // Deduplicated repos, keeping highest trust score version
-      const repoMap = new Map<string, GithubRepo>()
+      // Deduplicated repos, keeping highest trust score version + source info
+      const repoMap = new Map<string, RepoWithSource>()
       scans.forEach(s => s.github_repos?.forEach((gh: GithubRepo) => {
+        let source = s.author
+        try { source = s.author !== 'Article' && s.author !== 'Google Doc' && s.author !== 'Notion'
+          ? `@${s.author}` : new URL(s.url).hostname.replace('www.', '') } catch { /* keep author */ }
         const existing = repoMap.get(gh.fullName)
-        if (!existing || gh.trustScore > existing.trustScore) repoMap.set(gh.fullName, gh)
+        if (!existing || gh.trustScore > existing.repo.trustScore) repoMap.set(gh.fullName, { repo: gh, source })
       }))
-      const repos = Array.from(repoMap.values()).sort((a, b) => b.trustScore - a.trustScore)
+      const repos = Array.from(repoMap.values()).sort((a, b) => b.repo.trustScore - a.repo.trustScore)
 
       return { key, skillName, category, summary, scans, repos }
     })
@@ -664,9 +668,10 @@ export default function Home() {
 
                 {group.repos.length > 0 && (
                   <div className="history-repos">
-                    {group.repos.map((gh, j) => (
+                    {group.repos.map(({ repo: gh, source }, j) => (
                       <div key={j} className="batch-repo">
                         <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
+                        <span className="repo-source">via {source}</span>
                         <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
                         <button onClick={() => downloadFromScan(group.scans[0], gh)} className="download-btn-inline">.skill ↓</button>
                       </div>
@@ -782,6 +787,7 @@ export default function Home() {
         .batch-repo { display: flex; align-items: center; gap: 8px; }
         .batch-repo-name { font-size: 12px; color: var(--text); text-decoration: none; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .batch-repo-name:hover { text-decoration: underline; text-underline-offset: 2px; }
+        .repo-source { font-size: 10px; color: var(--text-dim); font-style: italic; flex-shrink: 0; }
         .download-btn-inline { background: none; border: 1px solid var(--border); padding: 2px 8px; font-family: var(--font-body); font-size: 10px; color: var(--text-muted); cursor: pointer; border-radius: 3px; transition: all 0.15s; white-space: nowrap; flex-shrink: 0; }
         .download-btn-inline:hover { border-color: var(--border-dark); color: var(--text); background: var(--bg-2); }
         .mini-trust { font-size: 10px; font-weight: 500; padding: 2px 7px; border-radius: 100px; border: 1px solid; }
