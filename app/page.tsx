@@ -98,6 +98,7 @@ export default function Home() {
   const [rescanningId, setRescanningId] = useState<string | null>(null)
   const [rescanLabel, setRescanLabel] = useState<Record<string, string>>({})
   const [historyFilter, setHistoryFilter] = useState('all')
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -310,6 +311,74 @@ export default function Home() {
     const repoMap: Record<string, { repoName: string; repoUrl: string; count: number }> = {}
     history.forEach(scan => scan.github_repos?.forEach((gh: GithubRepo) => { if (!repoMap[gh.fullName]) repoMap[gh.fullName] = { repoName: gh.fullName, repoUrl: gh.url, count: 0 }; repoMap[gh.fullName].count++ }))
     return Object.values(repoMap).filter(o => o.count > 1)
+  }
+
+  interface SkillGroup {
+    key: string; skillName: string; category: string; summary: string
+    scans: ScanRecord[]; repos: GithubRepo[]
+  }
+
+  const getSkillGroups = (): SkillGroup[] => {
+    // Build union-find over scans sharing any GitHub repo
+    const scanIds = history.map(s => s.id)
+    const parent: Record<string, string> = {}
+    scanIds.forEach(id => parent[id] = id)
+    const find = (id: string): string => parent[id] === id ? id : (parent[id] = find(parent[id]))
+    const union = (a: string, b: string) => { parent[find(a)] = find(b) }
+
+    // Map repo fullName -> scan ids that contain it
+    const repoToScans: Record<string, string[]> = {}
+    history.forEach(scan => {
+      scan.github_repos?.forEach((gh: GithubRepo) => {
+        if (!repoToScans[gh.fullName]) repoToScans[gh.fullName] = []
+        repoToScans[gh.fullName].push(scan.id)
+      })
+    })
+    // Union scans that share a repo
+    Object.values(repoToScans).forEach(ids => {
+      for (let i = 1; i < ids.length; i++) union(ids[0], ids[i])
+    })
+
+    // Group scans by root
+    const groups: Record<string, ScanRecord[]> = {}
+    history.forEach(scan => {
+      const root = find(scan.id)
+      if (!groups[root]) groups[root] = []
+      groups[root].push(scan)
+    })
+
+    return Object.entries(groups).map(([key, scans]) => {
+      // Most common skill_name
+      const nameCounts: Record<string, number> = {}
+      scans.forEach(s => { nameCounts[s.skill_name] = (nameCounts[s.skill_name] || 0) + 1 })
+      const skillName = Object.entries(nameCounts).sort((a, b) => b[1] - a[1])[0][0]
+
+      // Most common category
+      const catCounts: Record<string, number> = {}
+      scans.forEach(s => { catCounts[s.category] = (catCounts[s.category] || 0) + 1 })
+      const category = Object.entries(catCounts).sort((a, b) => b[1] - a[1])[0][0]
+
+      // Best summary (longest)
+      const summary = scans.reduce((best, s) => s.summary.length > best.length ? s.summary : best, '')
+
+      // Deduplicated repos, keeping highest trust score version
+      const repoMap = new Map<string, GithubRepo>()
+      scans.forEach(s => s.github_repos?.forEach((gh: GithubRepo) => {
+        const existing = repoMap.get(gh.fullName)
+        if (!existing || gh.trustScore > existing.trustScore) repoMap.set(gh.fullName, gh)
+      }))
+      const repos = Array.from(repoMap.values()).sort((a, b) => b.trustScore - a.trustScore)
+
+      return { key, skillName, category, summary, scans, repos }
+    })
+  }
+
+  const toggleGroup = (key: string) => {
+    setExpandedGroups(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
   }
 
   const isLoading = ['extracting', 'analyzing', 'github', 'similarity'].includes(stage)
@@ -567,18 +636,6 @@ export default function Home() {
             <button onClick={loadHistory} className="link-btn">Refresh</button>
           </div>
 
-          {historyOverlaps.length > 0 && (
-            <div className="overlaps-box">
-              <p className="overlaps-title">🔁 Repos appearing across multiple scans</p>
-              {historyOverlaps.map((o, i) => (
-                <div key={i} className="overlap-item">
-                  <a href={o.repoUrl} target="_blank" rel="noopener noreferrer" className="overlap-repo">{o.repoName}</a>
-                  <span className="overlap-count">{o.count} scans</span>
-                </div>
-              ))}
-            </div>
-          )}
-
           {!historyLoading && history.length > 0 && (
             <div className="filter-bar">
               <button className={`filter-pill ${historyFilter === 'all' ? 'active' : ''}`} onClick={() => setHistoryFilter('all')}>All</button>
@@ -594,53 +651,58 @@ export default function Home() {
           {!historyLoading && history.length === 0 && <p className="empty-msg">No scans yet.</p>}
 
           <div className="history-list">
-            {history.filter(s => historyFilter === 'all' || s.category === historyFilter).map((scan) => (
-              <div key={scan.id} className={`history-item ${rescanningId === scan.id ? 'rescanning' : ''}`}>
+            {getSkillGroups()
+              .filter(g => historyFilter === 'all' || g.category === historyFilter)
+              .map((group) => (
+              <div key={group.key} className="history-item">
                 <div className="history-item-header">
-                  <span className="pill">{CATEGORY_ICONS[scan.category] || '🧩'} {scan.category}</span>
-                  <div className="history-item-actions">
-                    <span className="history-date">{new Date(scan.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</span>
-                    <button
-                      onClick={() => rescan(scan)}
-                      disabled={rescanningId === scan.id}
-                      className="rescan-btn"
-                      title="Re-scan"
-                    >
-                      {rescanningId === scan.id ? '⟳' : '↻'}
-                    </button>
-                    <button
-                      onClick={() => deleteScan(scan.id)}
-                      disabled={deletingId === scan.id}
-                      className="delete-btn"
-                      title="Delete"
-                    >
-                      {deletingId === scan.id ? '…' : '✕'}
-                    </button>
-                  </div>
+                  <span className="pill">{CATEGORY_ICONS[group.category] || '🧩'} {group.category}</span>
+                  {group.scans.length > 1 && <span className="group-badge">Found in {group.scans.length} scans</span>}
                 </div>
-                <h3 className="history-skill-name">{scan.skill_name}</h3>
-                <p className="history-summary">{scan.summary}</p>
-                <p className="history-url">{scan.url.replace('https://', '').slice(0, 65)}</p>
-                {rescanningId === scan.id && rescanLabel[scan.id] && (
-                  <div className="rescan-status">
-                    <span className="stage-dot-pulse" />{rescanLabel[scan.id]}
-                  </div>
-                )}
-                {scan.github_repos?.length > 0 && (
+                <h3 className="history-skill-name">{group.skillName}</h3>
+                <p className="history-summary">{group.summary}</p>
+
+                {group.repos.length > 0 && (
                   <div className="history-repos">
-                    {Array.from(new Map(scan.github_repos.map((g: GithubRepo) => [g.fullName, g])).values()).slice(0, 3).map((gh, j) => (
+                    {group.repos.map((gh, j) => (
                       <div key={j} className="batch-repo">
-                        <a href={(gh as GithubRepo).url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{(gh as GithubRepo).fullName}</a>
-                        <span className={`mini-trust trust-${(gh as GithubRepo).trustLevel}`}>{(gh as GithubRepo).trustScore}</span>
-                        {scan.github_repos.length > 1 && (
-                          <button onClick={() => downloadFromScan(scan, gh as GithubRepo)} className="download-btn-inline">.skill ↓</button>
-                        )}
+                        <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
+                        <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
+                        <button onClick={() => downloadFromScan(group.scans[0], gh)} className="download-btn-inline">.skill ↓</button>
                       </div>
                     ))}
                   </div>
                 )}
-                {(!scan.github_repos || scan.github_repos.length <= 1) && (
-                  <button onClick={() => downloadFromScan(scan)} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download .skill ↓</button>
+                {group.repos.length === 0 && (
+                  <button onClick={() => downloadFromScan(group.scans[0])} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download .skill ↓</button>
+                )}
+
+                <button className="sources-toggle" onClick={() => toggleGroup(group.key)}>
+                  {expandedGroups.has(group.key) ? '▾' : '▸'} Sources ({group.scans.length})
+                </button>
+
+                {expandedGroups.has(group.key) && (
+                  <div className="sources-list">
+                    {group.scans.map(scan => (
+                      <div key={scan.id} className={`source-item ${rescanningId === scan.id ? 'rescanning' : ''}`}>
+                        <div className="source-item-row">
+                          <span className="source-url">{scan.url.replace('https://', '').slice(0, 55)}</span>
+                          <span className="source-date">{new Date(scan.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}</span>
+                          <button onClick={() => rescan(scan)} disabled={rescanningId === scan.id} className="rescan-btn" title="Re-scan">
+                            {rescanningId === scan.id ? '⟳' : '↻'}
+                          </button>
+                          <button onClick={() => deleteScan(scan.id)} disabled={deletingId === scan.id} className="delete-btn" title="Delete">
+                            {deletingId === scan.id ? '…' : '✕'}
+                          </button>
+                        </div>
+                        {rescanningId === scan.id && rescanLabel[scan.id] && (
+                          <div className="rescan-status">
+                            <span className="stage-dot-pulse" />{rescanLabel[scan.id]}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
                 )}
               </div>
             ))}
@@ -807,8 +869,16 @@ export default function Home() {
         .delete-btn:disabled { opacity: 0.4; cursor: not-allowed; }
         .history-skill-name { font-family: var(--font-display); font-size: 18px; font-weight: 500; letter-spacing: -0.2px; margin-bottom: 5px; }
         .history-summary { font-size: 13px; color: var(--text-muted); line-height: 1.6; font-weight: 300; margin-bottom: 6px; }
-        .history-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); margin-bottom: 8px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .history-repos { display: flex; flex-direction: column; gap: 4px; }
+        .history-repos { display: flex; flex-direction: column; gap: 4px; margin-bottom: 8px; }
+        .group-badge { font-size: 11px; color: var(--text-dim); background: var(--bg-2); border: 1px solid var(--border); border-radius: 100px; padding: 2px 8px; }
+        .sources-toggle { background: none; border: none; padding: 6px 0; font-family: var(--font-body); font-size: 12px; color: var(--text-dim); cursor: pointer; transition: color 0.15s; }
+        .sources-toggle:hover { color: var(--text); }
+        .sources-list { padding: 4px 0 0; display: flex; flex-direction: column; gap: 2px; }
+        .source-item { padding: 4px 0; }
+        .source-item.rescanning { opacity: 0.55; }
+        .source-item-row { display: flex; align-items: center; gap: 8px; }
+        .source-url { font-family: var(--font-mono); font-size: 11px; color: var(--text-dim); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .source-date { font-size: 11px; color: var(--text-dim); font-family: var(--font-mono); flex-shrink: 0; }
 
         @media (max-width: 640px) {
           .main { padding: 0 16px 80px; }
