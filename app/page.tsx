@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import JSZip from 'jszip'
 
 type Stage = 'idle' | 'extracting' | 'analyzing' | 'github' | 'similarity' | 'done' | 'error'
 type TrustLevel = 'high' | 'medium' | 'low'
@@ -276,29 +277,34 @@ export default function Home() {
     setStage('done')
   }
 
-  const triggerDownload = (content: string, filename: string) => {
-    const blob = new Blob([content], { type: 'text/plain' })
+  const triggerDownload = (blob: Blob, filename: string) => {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     a.download = filename
     a.click()
   }
 
+  const downloadSkillZip = async (slug: string, skillContent: string, promptContent: string) => {
+    const zip = new JSZip()
+    zip.folder(slug)!.file('SKILL.md', skillContent)
+    const blob = await zip.generateAsync({ type: 'blob' })
+    triggerDownload(blob, `${slug}.zip`)
+    setTimeout(() => triggerDownload(new Blob([promptContent], { type: 'text/plain' }), `${slug}-prompt.txt`), 500)
+  }
+
   const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
     const slug = an.skillName.toLowerCase().replace(/\s+/g, '-')
     const skillContent = `---\nname: ${slug}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n# ${an.skillName}\n\n${an.summary}\n\n## Source\n- GitHub: ${gh.url}\n\n## Key Steps\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n`
-    triggerDownload(skillContent, `${slug}.skill`)
     const prompt = `I've just installed the ${an.skillName} skill. Here's what it does:\n\n${an.summary}\n\nKey capabilities:\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    setTimeout(() => triggerDownload(prompt, `${slug}-prompt.txt`), 500)
+    downloadSkillZip(slug, skillContent, prompt)
   }
 
   const downloadFromScan = (scan: ScanRecord, repo?: GithubRepo) => {
     const slug = scan.skill_name.toLowerCase().replace(/\s+/g, '-')
     const ghUrl = repo?.url || scan.github_repos?.[0]?.url || scan.url
     const skillContent = `---\nname: ${slug}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n# ${scan.skill_name}\n\n${scan.summary}\n\n## Source\n- ${ghUrl}\n\n## Key Steps\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n`
-    triggerDownload(skillContent, `${slug}.skill`)
     const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    setTimeout(() => triggerDownload(prompt, `${slug}-prompt.txt`), 500)
+    downloadSkillZip(slug, skillContent, prompt)
   }
 
   const getOverlaps = () => {
