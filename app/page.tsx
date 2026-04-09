@@ -94,6 +94,7 @@ export default function Home() {
   const [history, setHistory] = useState<ScanRecord[]>([])
   const [historyLoading, setHistoryLoading] = useState(false)
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [dupScan, setDupScan] = useState<ScanRecord | null>(null)
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -149,7 +150,7 @@ export default function Home() {
   const reset = () => {
     setStage('idle'); setError(''); setExtracted(null)
     setAnalysis(null); setGithubResults([]); setSimilarityResults([])
-    setBatchResults([]); setBatchMode(false)
+    setBatchResults([]); setBatchMode(false); setDupScan(null)
   }
 
   const runSingle = async (url: string) => {
@@ -223,12 +224,33 @@ export default function Home() {
     await Promise.all(Array(Math.min(CONCURRENCY, urls.length)).fill(null).map(() => processNext()))
   }
 
-  const handleScan = () => {
+  const handleScan = async (force = false) => {
     const urls = urlInput.trim().split('\n').map(u => u.trim()).filter(u => u.startsWith('http'))
     if (urls.length === 0) return
+    // Check for duplicate (single URL only)
+    if (!force && urls.length === 1) {
+      try {
+        const res = await fetch(`/api/scans?url=${encodeURIComponent(urls[0])}`)
+        const data = await res.json()
+        if (data.match) { setDupScan(data.match); return }
+      } catch { /* proceed with scan */ }
+    }
     reset()
     if (urls.length === 1) runSingle(urls[0])
     else runBatch(urls)
+  }
+
+  const loadPreviousScan = (scan: ScanRecord) => {
+    setDupScan(null)
+    setAnalysis({
+      skillName: scan.skill_name, skillDescription: '', skillCategory: scan.category,
+      githubUrls: [], githubSearchTerms: scan.search_terms || [], otherUrls: [],
+      keySteps: scan.key_steps || [], claudeRelevance: '', contentQuality: '',
+      authorCredibility: null, isActuallyASkill: true, summary: scan.summary,
+    })
+    setGithubResults(scan.github_repos || [])
+    setExtracted({ author: scan.author, caption: '', transcript: null, thumbnail: null, source: scan.source })
+    setStage('done')
   }
 
   const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
@@ -304,7 +326,7 @@ export default function Home() {
                     className="url-input"
                     rows={isBatch ? Math.min(urlCount + 1, 6) : 2}
                   />
-                  <button onClick={handleScan} disabled={urlCount === 0} className="scan-btn">
+                  <button onClick={() => handleScan()} disabled={urlCount === 0} className="scan-btn">
                     {isBatch ? `Scan ${urlCount}` : 'Scan'}
                   </button>
                 </div>
@@ -314,6 +336,16 @@ export default function Home() {
                     <span className="error-title">Error: </span>
                     <span className="error-msg">{error}</span>
                     <button onClick={reset} className="link-btn" style={{marginLeft: '12px'}}>Try again →</button>
+                  </div>
+                )}
+                {dupScan && (
+                  <div className="error-box" style={{borderColor: '#b45309', background: '#fffbeb'}}>
+                    <span className="error-title" style={{color: '#b45309'}}>⚠️ Already scanned </span>
+                    <span className="error-msg">You scanned this URL on {new Date(dupScan.created_at).toLocaleDateString()}.</span>
+                    <div style={{marginTop: '8px', display: 'flex', gap: '8px'}}>
+                      <button onClick={() => loadPreviousScan(dupScan)} className="scan-btn" style={{fontSize: '13px', padding: '6px 14px'}}>View previous result</button>
+                      <button onClick={() => { setDupScan(null); handleScan(true) }} className="link-btn">Scan anyway →</button>
+                    </div>
                   </div>
                 )}
               </>

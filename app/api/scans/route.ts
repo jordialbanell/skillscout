@@ -22,8 +22,19 @@ export async function POST(req: NextRequest) {
   }
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
   try {
+    const urlParam = req.nextUrl.searchParams.get('url')
+    if (urlParam) {
+      const { data, error } = await supabase
+        .from('scans')
+        .select('*')
+        .eq('url', urlParam)
+        .order('created_at', { ascending: false })
+        .limit(1)
+      if (error) throw error
+      return NextResponse.json({ success: true, match: data?.[0] || null })
+    }
     const { data, error } = await supabase
       .from('scans')
       .select('*')
