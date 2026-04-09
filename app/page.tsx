@@ -100,6 +100,7 @@ export default function Home() {
   const [rescanLabel, setRescanLabel] = useState<Record<string, string>>({})
   const [historyFilter, setHistoryFilter] = useState('all')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  const [downloadingId, setDownloadingId] = useState<string | null>(null)
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -297,38 +298,91 @@ export default function Home() {
 
   const sanitizeYamlName = (slug: string) => sanitizeSlug(slug.replace(/claude-?/gi, '')).replace(/^-|-$/g, '') || slug
 
-  const downloadSkillFile = (gh: GithubRepo, an: Analysis) => {
-    const slug = an.skillName.toLowerCase().replace(/\s+/g, '-')
-    const yamlName = sanitizeYamlName(slug)
-    const skillContent = `---\nname: ${yamlName}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n# ${an.skillName}\n\n${an.summary}\n\n## Source\n- GitHub: ${gh.url}\n\n## Key Steps\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n`
-    const prompt = `I've just installed the ${an.skillName} skill. Here's what it does:\n\n${an.summary}\n\nKey capabilities:\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    downloadSkillZip(slug, skillContent, prompt)
+  const fetchRepoContent = async (repoUrl: string): Promise<{ body: string | null; skillFileContent: string | null }> => {
+    try {
+      const res = await fetch('/api/github', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ url: repoUrl }) })
+      const data = await res.json()
+      if (!data.success) return { body: null, skillFileContent: null }
+      const gh = data.github
+      // If repo has .skill files, fetch their content
+      if (gh.skillFiles?.length > 0) {
+        const repoPath = repoUrl.match(/github\.com\/([^/]+\/[^/\s?#]+)/)?.[1]
+        if (repoPath) {
+          const contents: string[] = []
+          for (const filePath of gh.skillFiles.slice(0, 3)) {
+            try {
+              const fileRes = await fetch(`https://raw.githubusercontent.com/${repoPath}/main/${filePath}`)
+              if (fileRes.ok) contents.push(await fileRes.text())
+            } catch { /* ignore */ }
+          }
+          if (contents.length > 0) return { body: null, skillFileContent: contents.join('\n\n') }
+        }
+      }
+      // Fall back to README
+      if (gh.readmeContent && gh.readmeContent.length > 100) return { body: gh.readmeContent, skillFileContent: null }
+      return { body: null, skillFileContent: null }
+    } catch { return { body: null, skillFileContent: null } }
   }
 
-  const downloadFromScan = (scan: ScanRecord, repo?: GithubRepo) => {
+  const downloadSkillFile = async (gh: GithubRepo, an: Analysis, btnId: string) => {
+    setDownloadingId(btnId)
+    const slug = an.skillName.toLowerCase().replace(/\s+/g, '-')
+    const yamlName = sanitizeYamlName(slug)
+    const { body: readmeBody, skillFileContent } = await fetchRepoContent(gh.url)
+    let bodyContent: string
+    if (skillFileContent) bodyContent = skillFileContent
+    else if (readmeBody) bodyContent = `# ${an.skillName}\n\n${readmeBody}`
+    else bodyContent = `# ${an.skillName}\n\n${an.summary}\n\n## Source\n- GitHub: ${gh.url}\n\n## Key Steps\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
+    const skillContent = skillFileContent
+      ? skillFileContent
+      : `---\nname: ${yamlName}\ndescription: ${an.skillDescription} Use this skill when working on ${an.skillCategory} tasks with Claude.\n---\n\n${bodyContent}\n`
+    const prompt = `I've just installed the ${an.skillName} skill. Here's what it does:\n\n${an.summary}\n\nKey capabilities:\n${an.keySteps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
+    await downloadSkillZip(slug, skillContent, prompt)
+    setDownloadingId(null)
+  }
+
+  const downloadFromScan = async (scan: ScanRecord, repo?: GithubRepo, btnId?: string) => {
+    if (btnId) setDownloadingId(btnId)
     const slug = scan.skill_name.toLowerCase().replace(/\s+/g, '-')
     const yamlName = sanitizeYamlName(slug)
     const ghUrl = repo?.url || scan.github_repos?.[0]?.url || scan.url
-    const skillContent = `---\nname: ${yamlName}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n# ${scan.skill_name}\n\n${scan.summary}\n\n## Source\n- ${ghUrl}\n\n## Key Steps\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n`
+    const { body: readmeBody, skillFileContent } = ghUrl.includes('github.com') ? await fetchRepoContent(ghUrl) : { body: null, skillFileContent: null }
+    let bodyContent: string
+    if (skillFileContent) bodyContent = skillFileContent
+    else if (readmeBody) bodyContent = `# ${scan.skill_name}\n\n${readmeBody}`
+    else bodyContent = `# ${scan.skill_name}\n\n${scan.summary}\n\n## Source\n- ${ghUrl}\n\n## Key Steps\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}`
+    const skillContent = skillFileContent
+      ? skillFileContent
+      : `---\nname: ${yamlName}\ndescription: Use this skill when working on ${scan.category} tasks with Claude.\n---\n\n${bodyContent}\n`
     const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    downloadSkillZip(slug, skillContent, prompt)
+    await downloadSkillZip(slug, skillContent, prompt)
+    if (btnId) setDownloadingId(null)
   }
 
-  const downloadGroupSkill = (group: SkillGroup) => {
+  const downloadGroupSkill = async (group: SkillGroup, btnId: string) => {
+    setDownloadingId(btnId)
     const slug = group.skillName.toLowerCase().replace(/\s+/g, '-')
     const yamlName = sanitizeYamlName(slug)
-    // Deduplicated key steps across all scans
     const allSteps = new Set<string>()
     group.scans.forEach(s => (s.key_steps || []).forEach((step: string) => allSteps.add(step)))
     const steps = Array.from(allSteps)
     const repos = group.repos.map(r => r.repo).sort((a, b) => b.trustScore - a.trustScore)
+    // Fetch content from the highest-trust repo
+    let fetchedBody = ''
+    if (repos.length > 0) {
+      const { body: readmeBody, skillFileContent } = await fetchRepoContent(repos[0].url)
+      if (skillFileContent) fetchedBody = skillFileContent
+      else if (readmeBody) fetchedBody = readmeBody
+    }
     const reposSection = repos.length > 0
       ? `\n## Recommended Repos\n${repos.map(r => `- [${r.fullName}](${r.url}) — trust score: ${r.trustScore}`).join('\n')}\n`
       : ''
     const sourcesSection = `\n## Sources\n${group.scans.map(s => `- ${s.url}`).join('\n')}\n`
-    const skillContent = `---\nname: ${yamlName}\ndescription: Use this skill when working on ${group.category} tasks with Claude.\n---\n\n# ${group.skillName}\n\n${group.summary}\n${reposSection}\n## Key Steps\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n${sourcesSection}`
+    const mainBody = fetchedBody || `${group.summary}\n\n## Key Steps\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
+    const skillContent = `---\nname: ${yamlName}\ndescription: Use this skill when working on ${group.category} tasks with Claude.\n---\n\n# ${group.skillName}\n\n${mainBody}\n${reposSection}${sourcesSection}`
     const prompt = `I've just installed the ${group.skillName} skill. Here's what it does:\n\n${group.summary}\n\nKey capabilities:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    downloadSkillZip(slug, skillContent, prompt)
+    await downloadSkillZip(slug, skillContent, prompt)
+    setDownloadingId(null)
   }
 
   const getOverlaps = () => {
@@ -641,7 +695,7 @@ export default function Home() {
                       )}
                       <div className="github-actions">
                         <a href={gh.url} target="_blank" rel="noopener noreferrer" className="link-btn">View on GitHub →</a>
-                        <button onClick={() => downloadSkillFile(gh, analysis)} className="download-btn">Download .skill ↓</button>
+                        <button onClick={() => downloadSkillFile(gh, analysis!, `scan-${i}`)} disabled={downloadingId === `scan-${i}`} className="download-btn">{downloadingId === `scan-${i}` ? 'Fetching…' : 'Download .skill ↓'}</button>
                       </div>
                     </div>
                   ))}
@@ -652,7 +706,7 @@ export default function Home() {
                 <div className="no-github">
                   <p className="no-github-title">No matching repos found</p>
                   <p className="no-github-sub">Generate a skill file from the extracted steps.</p>
-                  <button onClick={() => downloadSkillFile({ url: urlInput, fullName: 'manual', trustScore: 0, trustLevel: 'low', skillFiles: [], description: '', stars: 0, forks: 0, lastUpdated: '', language: '', name: '' }, analysis)} className="download-btn">Generate skill file ↓</button>
+                  <button onClick={() => downloadSkillFile({ url: urlInput, fullName: 'manual', trustScore: 0, trustLevel: 'low', skillFiles: [], description: '', stars: 0, forks: 0, lastUpdated: '', language: '', name: '' }, analysis!, 'scan-gen')} disabled={downloadingId === 'scan-gen'} className="download-btn">{downloadingId === 'scan-gen' ? 'Fetching…' : 'Generate skill file ↓'}</button>
                 </div>
               )}
 
@@ -703,12 +757,12 @@ export default function Home() {
                         <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
                         <span className="repo-source">via {source}</span>
                         <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
-                        <button onClick={() => downloadFromScan(group.scans[0], gh)} className="download-btn-secondary">this repo only ↓</button>
+                        <button onClick={() => downloadFromScan(group.scans[0], gh, `repo-${group.key}-${j}`)} disabled={downloadingId === `repo-${group.key}-${j}`} className="download-btn-secondary">{downloadingId === `repo-${group.key}-${j}` ? '…' : 'this repo only ↓'}</button>
                       </div>
                     ))}
                   </div>
                 )}
-                <button onClick={() => downloadGroupSkill(group)} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>Download combined .skill ↓</button>
+                <button onClick={() => downloadGroupSkill(group, `group-${group.key}`)} disabled={downloadingId === `group-${group.key}`} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>{downloadingId === `group-${group.key}` ? 'Fetching repo content…' : 'Download combined .skill ↓'}</button>
 
                 <button className="sources-toggle" onClick={() => toggleGroup(group.key)}>
                   {expandedGroups.has(group.key) ? '▾' : '▸'} Sources ({group.scans.length})
