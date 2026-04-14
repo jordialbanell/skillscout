@@ -115,9 +115,18 @@ export default function Home() {
       if (recObj.skip.includes(name)) return 'skip'
       return null
     }
+    const downloadAllRecommended = async () => {
+      if (!recObj) return
+      for (let i = 0; i < recObj.recommended.length; i++) {
+        const name = recObj.recommended[i]
+        if (!lib.skills.find(s => s.name === name)) continue
+        await downloadIndividualSkill(repoPath, name, `lib-${libKey}-${name}`)
+        if (i < recObj.recommended.length - 1) await new Promise(r => setTimeout(r, 500))
+      }
+    }
     return (
       <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
-        <li style={{ padding: '4px 0 8px' }}>
+        <li style={{ padding: '4px 0 8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
           <button
             onClick={() => fetchRecommendations(libKey, lib.skills.map(s => s.name))}
             disabled={rec === 'loading'}
@@ -125,21 +134,30 @@ export default function Home() {
           >
             {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : '✨ Get recommendations'}
           </button>
+          {recObj && recObj.recommended.length > 0 && (
+            <button onClick={downloadAllRecommended} className="download-btn">
+              Download recommended ({recObj.recommended.length}) ↓
+            </button>
+          )}
         </li>
         {lib.skills.map(s => {
           const btnId = `lib-${libKey}-${s.name}`
           const status = statusFor(s.name)
           const reason = recObj?.reasoning[s.name]
-          const style: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '4px' }
-          if (status === 'recommended') { style.background = '#dcfce7'; style.color = '#166534' }
-          else if (status === 'skip') { style.opacity = 0.45 }
+          const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '6px 0', opacity: status === 'skip' ? 0.5 : 1 }
           return (
-            <li key={s.name} style={style}>
+            <li key={s.name} style={rowStyle}>
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>
-                  {status === 'recommended' ? '✓ ' : status === 'skip' ? '· ' : '◈ '}{s.name}
+                <span style={{ fontFamily: 'monospace', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                  <span>{s.name}</span>
+                  {status === 'recommended' && (
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#15803d', background: '#dcfce7', padding: '1px 6px', borderRadius: '10px', fontFamily: 'inherit' }}>
+                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#16a34a' }} />
+                      recommended
+                    </span>
+                  )}
                 </span>
-                {reason && <span style={{ fontSize: '11px', color: status === 'recommended' ? '#166534' : 'var(--text-muted, #666)', marginTop: '2px' }}>{reason}</span>}
+                {reason && <span style={{ fontSize: '11px', color: 'var(--text-muted, #888)', marginTop: '3px', lineHeight: 1.4 }}>{reason}</span>}
               </div>
               <button onClick={() => downloadIndividualSkill(repoPath, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
                 {downloadingId === btnId ? '…' : 'download ↓'}
