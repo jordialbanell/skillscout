@@ -105,13 +105,15 @@ export default function Home() {
   const [expandedLib, setExpandedLib] = useState<Set<string>>(new Set())
 
   useEffect(() => {
-    githubResults.forEach(gh => {
-      if (gh.fullName in libraryMap) return
-      setLibraryMap(m => ({ ...m, [gh.fullName]: 'loading' }))
-      detectSkillLibrary(gh.fullName).then(lib => setLibraryMap(m => ({ ...m, [gh.fullName]: lib })))
-    })
+    const probe = (fullName: string) => {
+      if (fullName in libraryMap) return
+      setLibraryMap(m => ({ ...m, [fullName]: 'loading' }))
+      detectSkillLibrary(fullName).then(lib => setLibraryMap(m => ({ ...m, [fullName]: lib })))
+    }
+    githubResults.forEach(gh => probe(gh.fullName))
+    history.forEach(scan => scan.github_repos?.forEach((gh: GithubRepo) => probe(gh.fullName)))
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [githubResults])
+  }, [githubResults, history])
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -919,14 +921,45 @@ export default function Home() {
 
                 {group.repos.length > 0 && (
                   <div className="history-repos">
-                    {group.repos.map(({ repo: gh, source }, j) => (
-                      <div key={j} className="batch-repo">
-                        <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
-                        <span className="repo-source">via {source}</span>
-                        <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
-                        <button onClick={() => downloadFromScan(group.scans[0], gh, `repo-${group.key}-${j}`)} disabled={downloadingId === `repo-${group.key}-${j}`} className="download-btn-secondary">{downloadingId === `repo-${group.key}-${j}` ? '…' : 'this repo only ↓'}</button>
-                      </div>
-                    ))}
+                    {group.repos.map(({ repo: gh, source }, j) => {
+                      const lib = libraryMap[gh.fullName]
+                      const isLib = lib && lib !== 'loading'
+                      const libKey = `${group.key}-${gh.fullName}`
+                      return (
+                        <div key={j}>
+                          <div className="batch-repo">
+                            <a href={gh.url} target="_blank" rel="noopener noreferrer" className="batch-repo-name">{gh.fullName}</a>
+                            <span className="repo-source">via {source}</span>
+                            <span className={`mini-trust trust-${gh.trustLevel}`}>{gh.trustScore}</span>
+                            {isLib ? (
+                              <button
+                                onClick={() => setExpandedLib(s => { const n = new Set(s); if (n.has(libKey)) n.delete(libKey); else n.add(libKey); return n })}
+                                className="download-btn-secondary"
+                              >
+                                {(lib as SkillLibrary).skills.length} skills inside {expandedLib.has(libKey) ? '▲' : '▼'}
+                              </button>
+                            ) : (
+                              <button onClick={() => downloadFromScan(group.scans[0], gh, `repo-${group.key}-${j}`)} disabled={downloadingId === `repo-${group.key}-${j}`} className="download-btn-secondary">{downloadingId === `repo-${group.key}-${j}` ? '…' : 'this repo only ↓'}</button>
+                            )}
+                          </div>
+                          {isLib && expandedLib.has(libKey) && (
+                            <ul className="skill-library-list" style={{ listStyle: 'none', padding: '6px 0 8px 16px', margin: 0 }}>
+                              {(lib as SkillLibrary).skills.map(s => {
+                                const btnId = `lib-${libKey}-${s.name}`
+                                return (
+                                  <li key={s.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0' }}>
+                                    <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>◈ {s.name}</span>
+                                    <button onClick={() => downloadIndividualSkill(gh.fullName, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
+                                      {downloadingId === btnId ? '…' : 'download ↓'}
+                                    </button>
+                                  </li>
+                                )
+                              })}
+                            </ul>
+                          )}
+                        </div>
+                      )
+                    })}
                   </div>
                 )}
                 <button className="sources-toggle" onClick={() => toggleGroup(group.key)}>
