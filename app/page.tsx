@@ -450,7 +450,8 @@ export default function Home() {
     const prefix = entry.prefix
     const blobs = lib.tree.filter(t => t.type === 'blob' && t.path.startsWith(prefix))
     const [owner, repo] = repoPath.split('/')
-    const uniqueName = sanitizeSlug(`${owner}-${repo}-${skillName}`)
+    const stripReserved = (s: string) => s.replace(/anthropics?/gi, '').replace(/claude/gi, '')
+    const uniqueName = sanitizeSlug(`${stripReserved(owner)}-${stripReserved(repo)}-${stripReserved(skillName)}`) || sanitizeSlug(skillName)
     const zip = new JSZip()
     const folder = zip.folder(uniqueName)!
     await Promise.all(blobs.map(async f => {
