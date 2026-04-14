@@ -160,25 +160,25 @@ export default function Home() {
     const allSelected = allNames.length > 0 && allNames.every(n => selected.has(n))
     const btnId = `lib-selected-${libKey}`
     return (
-      <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
-        <li style={{ padding: '4px 0 8px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
+      <ul className="skill-library-list">
+        <li className="skill-library-actions">
           <button
             onClick={() => fetchRecommendations(libKey, allNames)}
             disabled={rec === 'loading'}
-            className="link-btn"
+            className="picker-link-btn"
           >
             {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : 'Get recommendations'}
           </button>
           <button
             onClick={() => downloadSelectedSkills(libKey, repoPath, lib, btnId)}
             disabled={selected.size === 0 || downloadingId === btnId}
-            className="scan-btn"
+            className="picker-scan-btn"
           >
             {downloadingId === btnId ? 'Zipping…' : `Download selected (${selected.size}) ↓`}
           </button>
           <button
             onClick={() => setAllSelected(libKey, allSelected ? [] : allNames)}
-            className="link-btn"
+            className="picker-link-btn"
           >
             {allSelected ? 'Deselect all' : 'Select all'}
           </button>
@@ -187,30 +187,48 @@ export default function Home() {
           const status = statusFor(s.name)
           const reason = recObj?.reasoning[s.name]
           const isChecked = selected.has(s.name)
-          const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0', opacity: status === 'skip' && !isChecked ? 0.5 : 1 }
+          const dim = status === 'skip' && !isChecked
           return (
-            <li key={s.name} style={rowStyle}>
+            <li key={s.name} className={`picker-skill-row ${dim ? 'dim' : ''}`}>
               <input
                 type="checkbox"
                 checked={isChecked}
                 onChange={() => toggleSkillSelection(libKey, s.name)}
-                style={{ marginTop: '3px', cursor: 'pointer' }}
+                className="picker-checkbox"
               />
-              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                <span className="batch-repo-name" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', whiteSpace: 'normal' }}>
-                  <span>{s.name}</span>
+              <div className="picker-skill-body">
+                <span className="picker-skill-name">
+                  {s.name}
                   {status === 'recommended' && (
-                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#15803d', background: '#dcfce7', padding: '1px 6px', borderRadius: '10px', fontFamily: 'inherit' }}>
-                      <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#16a34a' }} />
+                    <span className="picker-rec-pill">
+                      <span className="picker-rec-dot" />
                       recommended
                     </span>
                   )}
                 </span>
-                {reason && <span style={{ fontSize: '11px', color: 'var(--text-muted, #888)', marginTop: '3px', lineHeight: 1.4 }}>{reason}</span>}
+                {reason && <span className="picker-skill-reason">{reason}</span>}
               </div>
             </li>
           )
         })}
+        <style jsx>{`
+          .skill-library-list { list-style: none; padding: 8px 0 0; margin: 0; border-top: 1px solid var(--border); margin-top: 8px; }
+          .skill-library-actions { padding: 4px 0 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
+          .picker-link-btn { background: none; border: none; padding: 0; font-family: var(--font-body); font-size: 12px; color: var(--text); cursor: pointer; text-decoration: underline; text-underline-offset: 3px; }
+          .picker-link-btn:hover:not(:disabled) { opacity: 0.6; }
+          .picker-link-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+          .picker-scan-btn { background: var(--text); color: white; border: none; padding: 6px 14px; font-family: var(--font-body); font-size: 12px; font-weight: 500; letter-spacing: 0.03em; cursor: pointer; transition: opacity 0.15s; white-space: nowrap; border-radius: 2px; }
+          .picker-scan-btn:hover:not(:disabled) { opacity: 0.8; }
+          .picker-scan-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+          .picker-skill-row { display: flex; align-items: flex-start; gap: 10px; padding: 5px 0; }
+          .picker-skill-row.dim { opacity: 0.5; }
+          .picker-checkbox { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
+          .picker-skill-body { display: flex; flex-direction: column; min-width: 0; flex: 1; }
+          .picker-skill-name { font-family: var(--font-body); font-size: 12px; color: var(--text); display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+          .picker-skill-reason { font-family: var(--font-body); font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
+          .picker-rec-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--green); background: var(--green-bg); border: 1px solid var(--green-border); padding: 1px 6px; border-radius: 10px; }
+          .picker-rec-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+        `}</style>
       </ul>
     )
   }
