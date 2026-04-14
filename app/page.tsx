@@ -123,26 +123,11 @@ export default function Home() {
     const selected = selectedSkills[libKey]
     if (!selected || selected.size === 0) return
     setDownloadingId(btnId)
-    const zip = new JSZip()
-    for (const entry of lib.skills) {
-      if (!selected.has(entry.name)) continue
-      const folder = zip.folder(sanitizeSlug(entry.name))!
-      const blobs = lib.tree.filter(t => t.type === 'blob' && t.path.startsWith(entry.prefix))
-      await Promise.all(blobs.map(async f => {
-        const rel = f.path.slice(entry.prefix.length)
-        try {
-          const r = await fetch(`https://raw.githubusercontent.com/${repoPath}/${lib.defaultBranch}/${f.path}`)
-          if (!r.ok) return
-          if (/\.(md|txt|json|ya?ml|py|js|ts|tsx|jsx|sh|html|css|toml|xml|csv|svg)$/i.test(rel)) {
-            folder.file(rel, await r.text())
-          } else {
-            folder.file(rel, await r.blob())
-          }
-        } catch { /* ignore */ }
-      }))
+    const names = lib.skills.filter(s => selected.has(s.name)).map(s => s.name)
+    for (let i = 0; i < names.length; i++) {
+      await downloadIndividualSkill(repoPath, names[i], `${btnId}-${names[i]}`)
+      if (i < names.length - 1) await new Promise(r => setTimeout(r, 500))
     }
-    const blob = await zip.generateAsync({ type: 'blob' })
-    triggerDownload(blob, `selected-skills.zip`)
     setDownloadingId(null)
   }
 
