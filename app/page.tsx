@@ -103,6 +103,65 @@ export default function Home() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [libraryMap, setLibraryMap] = useState<Record<string, SkillLibrary | 'loading' | null>>({})
   const [expandedLib, setExpandedLib] = useState<Set<string>>(new Set())
+  interface Recommendation { recommended: string[]; skip: string[]; reasoning: Record<string, string> }
+  const [recommendations, setRecommendations] = useState<Record<string, Recommendation | 'loading'>>({})
+
+  const renderSkillLibraryList = (libKey: string, lib: SkillLibrary, repoPath: string) => {
+    const rec = recommendations[libKey]
+    const recObj = rec && rec !== 'loading' ? rec : null
+    const statusFor = (name: string): 'recommended' | 'skip' | null => {
+      if (!recObj) return null
+      if (recObj.recommended.includes(name)) return 'recommended'
+      if (recObj.skip.includes(name)) return 'skip'
+      return null
+    }
+    return (
+      <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
+        <li style={{ padding: '4px 0 8px' }}>
+          <button
+            onClick={() => fetchRecommendations(libKey, lib.skills.map(s => s.name))}
+            disabled={rec === 'loading'}
+            className="download-btn-secondary"
+          >
+            {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : '✨ Get recommendations'}
+          </button>
+        </li>
+        {lib.skills.map(s => {
+          const btnId = `lib-${libKey}-${s.name}`
+          const status = statusFor(s.name)
+          const reason = recObj?.reasoning[s.name]
+          const style: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px', padding: '4px 6px', borderRadius: '4px' }
+          if (status === 'recommended') { style.background = '#dcfce7'; style.color = '#166534' }
+          else if (status === 'skip') { style.opacity = 0.45 }
+          return (
+            <li key={s.name} style={style}>
+              <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
+                <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>
+                  {status === 'recommended' ? '✓ ' : status === 'skip' ? '· ' : '◈ '}{s.name}
+                </span>
+                {reason && <span style={{ fontSize: '11px', color: status === 'recommended' ? '#166534' : 'var(--text-muted, #666)', marginTop: '2px' }}>{reason}</span>}
+              </div>
+              <button onClick={() => downloadIndividualSkill(repoPath, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
+                {downloadingId === btnId ? '…' : 'download ↓'}
+              </button>
+            </li>
+          )
+        })}
+      </ul>
+    )
+  }
+
+  const fetchRecommendations = async (libKey: string, skills: string[]) => {
+    setRecommendations(r => ({ ...r, [libKey]: 'loading' }))
+    try {
+      const res = await fetch('/api/recommend-skills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skills }) })
+      const data = await res.json()
+      if (data.success) setRecommendations(r => ({ ...r, [libKey]: { recommended: data.recommended || [], skip: data.skip || [], reasoning: data.reasoning || {} } }))
+      else setRecommendations(r => { const { [libKey]: _, ...rest } = r; return rest })
+    } catch {
+      setRecommendations(r => { const { [libKey]: _, ...rest } = r; return rest })
+    }
+  }
 
   useEffect(() => {
     const probe = (fullName: string) => {
@@ -850,21 +909,7 @@ export default function Home() {
                       {(() => {
                         const lib = libraryMap[gh.fullName]
                         if (!lib || lib === 'loading' || !expandedLib.has(gh.fullName)) return null
-                        return (
-                          <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
-                            {(lib as SkillLibrary).skills.map(s => {
-                              const btnId = `lib-${gh.fullName}-${s.name}`
-                              return (
-                                <li key={s.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
-                                  <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>◈ {s.name}</span>
-                                  <button onClick={() => downloadIndividualSkill(gh.fullName, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
-                                    {downloadingId === btnId ? '…' : 'download ↓'}
-                                  </button>
-                                </li>
-                              )
-                            })}
-                          </ul>
-                        )
+                        return renderSkillLibraryList(gh.fullName, lib as SkillLibrary, gh.fullName)
                       })()}
                     </div>
                   ))}
@@ -943,19 +988,9 @@ export default function Home() {
                             )}
                           </div>
                           {isLib && expandedLib.has(libKey) && (
-                            <ul className="skill-library-list" style={{ listStyle: 'none', padding: '6px 0 8px 16px', margin: 0 }}>
-                              {(lib as SkillLibrary).skills.map(s => {
-                                const btnId = `lib-${libKey}-${s.name}`
-                                return (
-                                  <li key={s.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '3px 0' }}>
-                                    <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>◈ {s.name}</span>
-                                    <button onClick={() => downloadIndividualSkill(gh.fullName, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
-                                      {downloadingId === btnId ? '…' : 'download ↓'}
-                                    </button>
-                                  </li>
-                                )
-                              })}
-                            </ul>
+                            <div style={{ padding: '0 0 0 16px' }}>
+                              {renderSkillLibraryList(libKey, lib as SkillLibrary, gh.fullName)}
+                            </div>
                           )}
                         </div>
                       )
