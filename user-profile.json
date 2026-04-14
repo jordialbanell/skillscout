@@ -1,0 +1,37 @@
+{
+  "role": "Senior consultant at Hei by TOPPAN NEXT, Singapore. B2B brand strategy and Marketing-as-a-Service consultancy.",
+  "active_projects": [
+    "TD IP ABM campaign: LinkedIn outreach to BAE Systems and Unilever IP teams. Conservative IP professional audience. InMail templates, contact research, outreach log.",
+    "SIT (Singapore Institute of Technology): Open House digital activations, Campus Quest web app, Virtual Campus Tour, social captions. Audience: prospective students and parents.",
+    "TDL (TOPPAN Digital Language): Strategic partnership content, qualification frameworks, case studies.",
+    "PlayPoint x SilverActive: Active retainer, details TBC.",
+    "Agentic AI (TIS x Hei): Exploring agentic AI workflows for client delivery."
+  ],
+  "installed_skills": [
+    "hei-brand-comms",
+    "frontend-design",
+    "pptx",
+    "docx",
+    "pdf",
+    "xlsx",
+    "lbs-dima-digital-marketing"
+  ],
+  "dev_projects": [
+    "Jordi-CRM: single HTML file kanban board, Netlify hosted, Telegram bot for overdue alerts",
+    "SkillScout: this app, Next.js 14, scans URLs and GitHub repos for Claude skills",
+    "Site Auditor: Next.js 14, Apify scraper, Claude Haiku per-page + Sonnet brand summary, Upstash Redis cache"
+  ],
+  "dev_stack": ["Next.js 14", "TypeScript", "Tailwind", "Supabase", "Vercel", "Claude API", "Apify"],
+  "growth_ambitions": [
+    "SEO auditing and strategy as a new Hei service line",
+    "UI/UX wireframing for client pitches and proposals",
+    "Video content production for client social",
+    "Agentic AI workflows for marketing automation"
+  ],
+  "not_relevant": [
+    "SaaS conversion funnels",
+    "ecommerce and B2C lead generation",
+    "free trial and pricing page optimisation",
+    "consumer app growth hacking"
+  ]
+}

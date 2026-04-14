@@ -103,7 +103,7 @@ export default function Home() {
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
   const [libraryMap, setLibraryMap] = useState<Record<string, SkillLibrary | 'loading' | null>>({})
   const [expandedLib, setExpandedLib] = useState<Set<string>>(new Set())
-  interface Recommendation { recommended: string[]; skip: string[]; reasoning: Record<string, string> }
+  interface Recommendation { use_now: string[]; sell_next: string[]; productivity: string[]; skip: string[]; reasoning: Record<string, string> }
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation | 'loading'>>({})
   const [selectedSkills, setSelectedSkills] = useState<Record<string, Set<string>>>({})
 
@@ -134,11 +134,20 @@ export default function Home() {
   const renderSkillLibraryList = (libKey: string, lib: SkillLibrary, repoPath: string) => {
     const rec = recommendations[libKey]
     const recObj = rec && rec !== 'loading' ? rec : null
-    const statusFor = (name: string): 'recommended' | 'skip' | null => {
+    type Bucket = 'use_now' | 'sell_next' | 'productivity' | 'skip'
+    const statusFor = (name: string): Bucket | null => {
       if (!recObj) return null
-      if (recObj.recommended.includes(name)) return 'recommended'
+      if (recObj.use_now.includes(name)) return 'use_now'
+      if (recObj.sell_next.includes(name)) return 'sell_next'
+      if (recObj.productivity.includes(name)) return 'productivity'
       if (recObj.skip.includes(name)) return 'skip'
       return null
+    }
+    const bucketMeta: Record<Bucket, { label: string; className: string }> = {
+      use_now: { label: 'Use now', className: 'picker-badge-green' },
+      sell_next: { label: 'Sell next', className: 'picker-badge-blue' },
+      productivity: { label: 'Productivity', className: 'picker-badge-amber' },
+      skip: { label: 'Skip', className: 'picker-badge-grey' },
     }
     const selected = selectedSkills[libKey] || new Set<string>()
     const allNames = lib.skills.map(s => s.name)
@@ -168,34 +177,43 @@ export default function Home() {
             {allSelected ? 'Deselect all' : 'Select all'}
           </button>
         </li>
-        {lib.skills.map(s => {
-          const status = statusFor(s.name)
-          const reason = recObj?.reasoning[s.name]
-          const isChecked = selected.has(s.name)
-          const dim = status === 'skip' && !isChecked
-          return (
-            <li key={s.name} className={`picker-skill-row ${dim ? 'dim' : ''}`}>
-              <input
-                type="checkbox"
-                checked={isChecked}
-                onChange={() => toggleSkillSelection(libKey, s.name)}
-                className="picker-checkbox"
-              />
-              <div className="picker-skill-body">
-                <span className="picker-skill-name">
-                  {s.name}
-                  {status === 'recommended' && (
-                    <span className="picker-rec-pill">
-                      <span className="picker-rec-dot" />
-                      recommended
-                    </span>
-                  )}
-                </span>
-                {reason && <span className="picker-skill-reason">{reason}</span>}
-              </div>
-            </li>
-          )
-        })}
+        {(() => {
+          const renderRow = (s: { name: string; prefix: string }, status: Bucket | null) => {
+            const reason = recObj?.reasoning[s.name]
+            const isChecked = selected.has(s.name)
+            const dim = status === 'skip' && !isChecked
+            return (
+              <li key={s.name} className={`picker-skill-row ${dim ? 'dim' : ''}`}>
+                <input
+                  type="checkbox"
+                  checked={isChecked}
+                  onChange={() => toggleSkillSelection(libKey, s.name)}
+                  className="picker-checkbox"
+                />
+                <div className="picker-skill-body">
+                  <span className="picker-skill-name">{s.name}</span>
+                  {reason && <span className="picker-skill-reason">{reason}</span>}
+                </div>
+              </li>
+            )
+          }
+          if (!recObj) return lib.skills.map(s => renderRow(s, null))
+          const buckets: Bucket[] = ['use_now', 'sell_next', 'productivity', 'skip']
+          return buckets.map(b => {
+            const names = recObj[b]
+            if (!names || names.length === 0) return null
+            const entries = lib.skills.filter(s => names.includes(s.name))
+            if (entries.length === 0) return null
+            return (
+              <li key={b} className="picker-bucket">
+                <span className={`picker-badge ${bucketMeta[b].className}`}>{bucketMeta[b].label}</span>
+                <ul className="picker-bucket-list">
+                  {entries.map(s => renderRow(s, b))}
+                </ul>
+              </li>
+            )
+          })
+        })()}
         <style jsx>{`
           .skill-library-list { list-style: none; padding: 8px 0 0; margin: 0; border-top: 1px solid var(--border); margin-top: 8px; }
           .skill-library-actions { padding: 4px 0 8px; display: flex; gap: 12px; flex-wrap: wrap; align-items: center; }
@@ -213,6 +231,13 @@ export default function Home() {
           .picker-skill-reason { font-family: var(--font-body); font-size: 11px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
           .picker-rec-pill { display: inline-flex; align-items: center; gap: 4px; font-size: 10px; color: var(--green); background: var(--green-bg); border: 1px solid var(--green-border); padding: 1px 6px; border-radius: 10px; }
           .picker-rec-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--green); }
+          .picker-bucket { display: block; margin-top: 12px; }
+          .picker-bucket-list { list-style: none; padding: 4px 0 0; margin: 0; }
+          .picker-badge { display: inline-block; font-family: var(--font-body); font-size: 10px; font-weight: 500; letter-spacing: 0.04em; text-transform: uppercase; padding: 2px 8px; border-radius: 10px; border: 1px solid; }
+          .picker-badge-green { color: var(--green); background: var(--green-bg); border-color: var(--green-border); }
+          .picker-badge-blue { color: #1e40af; background: #eff6ff; border-color: #bfdbfe; }
+          .picker-badge-amber { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-border); }
+          .picker-badge-grey { color: var(--text-muted); background: var(--bg-3); border-color: var(--border); }
         `}</style>
       </ul>
     )
@@ -224,8 +249,15 @@ export default function Home() {
       const res = await fetch('/api/recommend-skills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skills }) })
       const data = await res.json()
       if (data.success) {
-        setRecommendations(r => ({ ...r, [libKey]: { recommended: data.recommended || [], skip: data.skip || [], reasoning: data.reasoning || {} } }))
-        setSelectedSkills(prev => ({ ...prev, [libKey]: new Set(data.recommended || []) }))
+        const rec: Recommendation = {
+          use_now: data.use_now || [],
+          sell_next: data.sell_next || [],
+          productivity: data.productivity || [],
+          skip: data.skip || [],
+          reasoning: data.reasoning || {},
+        }
+        setRecommendations(r => ({ ...r, [libKey]: rec }))
+        setSelectedSkills(prev => ({ ...prev, [libKey]: new Set([...rec.use_now, ...rec.sell_next, ...rec.productivity]) }))
       }
       else setRecommendations(r => { const { [libKey]: _, ...rest } = r; return rest })
     } catch {
