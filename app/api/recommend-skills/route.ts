@@ -16,7 +16,18 @@ export async function POST(req: NextRequest) {
       system: `You are a skill advisor for Claude users. Based on the available skills from a GitHub repository, recommend which ones are most worth installing. Be concise and practical. Return JSON only: { "recommended": ["skill-name", ...], "skip": ["skill-name", ...], "reasoning": { "skill-name": "one line reason" } }`,
       messages: [{
         role: 'user',
-        content: `Available skills: ${skills.join(', ')}\n\nThe user is a marketing professional who builds web tools, creates client presentations and documents, and is exploring agentic AI workflows. Recommend which skills to install and which to skip.`,
+        content: `Available skills: ${skills.join(', ')}
+
+The user's profile:
+- Senior consultant at Hei by TOPPAN NEXT (Singapore), a B2B brand strategy and Marketing-as-a-Service consultancy
+- Active clients: SIT (Singapore Institute of Technology), TD IP (TOPPAN Digital IP, conservative IP professionals), TDL (TOPPAN Digital Language), PlayPoint
+- Daily work: writing client emails, LinkedIn content, proposals, campaign briefs, QBR decks
+- Already installed: hei-brand-comms, frontend-design, pptx, docx, pdf, xlsx skills
+- Side projects: Jordi-CRM (single HTML kanban), SkillScout (this app), Site Auditor (Next.js + Apify)
+- Stack: Next.js 14, TypeScript, Tailwind, Supabase, Vercel, Claude API
+- Does NOT need: SaaS conversion funnels, pricing pages, lead magnets, free trial CTAs, ecommerce
+
+Recommend which skills to install and which to skip. Be specific about why each recommendation fits or doesn't fit this profile.`,
       }],
     })
 
