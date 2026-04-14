@@ -165,8 +165,7 @@ export default function Home() {
           <button
             onClick={() => fetchRecommendations(libKey, allNames)}
             disabled={rec === 'loading'}
-            className="scan-btn"
-            style={{ fontSize: '13px', padding: '6px 14px' }}
+            className="link-btn"
           >
             {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : 'Get recommendations'}
           </button>
@@ -174,7 +173,6 @@ export default function Home() {
             onClick={() => downloadSelectedSkills(libKey, repoPath, lib, btnId)}
             disabled={selected.size === 0 || downloadingId === btnId}
             className="scan-btn"
-            style={{ fontSize: '13px', padding: '6px 14px' }}
           >
             {downloadingId === btnId ? 'Zipping…' : `Download selected (${selected.size}) ↓`}
           </button>
