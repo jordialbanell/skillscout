@@ -101,6 +101,17 @@ export default function Home() {
   const [historyFilter, setHistoryFilter] = useState('all')
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
   const [downloadingId, setDownloadingId] = useState<string | null>(null)
+  const [libraryMap, setLibraryMap] = useState<Record<string, SkillLibrary | 'loading' | null>>({})
+  const [expandedLib, setExpandedLib] = useState<Set<string>>(new Set())
+
+  useEffect(() => {
+    githubResults.forEach(gh => {
+      if (gh.fullName in libraryMap) return
+      setLibraryMap(m => ({ ...m, [gh.fullName]: 'loading' }))
+      detectSkillLibrary(gh.fullName).then(lib => setLibraryMap(m => ({ ...m, [gh.fullName]: lib })))
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [githubResults])
 
   const urlCount = urlInput.trim().split('\n').filter(u => u.trim().startsWith('http')).length
   const isBatch = urlCount > 1
@@ -288,6 +299,49 @@ export default function Home() {
   const sanitizeSlug = (s: string) => s.replace(/[^a-z0-9-]/gi, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '') || s
 
   interface RepoFile { path: string; content: string }
+  interface SkillLibrary { skills: string[]; tree: { path: string; type: string }[]; defaultBranch: string }
+
+  const detectSkillLibrary = async (repoPath: string): Promise<SkillLibrary | null> => {
+    try {
+      const repoRes = await fetch(`https://api.github.com/repos/${repoPath}`, { headers: { 'User-Agent': 'SkillScout/1.0' } })
+      if (!repoRes.ok) return null
+      const branch = (await repoRes.json()).default_branch || 'main'
+      const treeRes = await fetch(`https://api.github.com/repos/${repoPath}/git/trees/${branch}?recursive=1`, { headers: { 'User-Agent': 'SkillScout/1.0' } })
+      if (!treeRes.ok) return null
+      const treeData = await treeRes.json()
+      const tree: { path: string; type: string }[] = treeData.tree || []
+      const skillPaths = tree.filter(t => t.type === 'blob' && /^skills\/[^/]+\/SKILL\.md$/i.test(t.path))
+      if (skillPaths.length < 2) return null
+      const skills = Array.from(new Set(skillPaths.map(t => t.path.split('/')[1]))).sort()
+      return { skills, tree, defaultBranch: branch }
+    } catch { return null }
+  }
+
+  const downloadIndividualSkill = async (repoPath: string, skillName: string, btnId: string) => {
+    setDownloadingId(btnId)
+    const lib = libraryMap[repoPath]
+    if (!lib || lib === 'loading') { setDownloadingId(null); return }
+    const prefix = `skills/${skillName}/`
+    const blobs = lib.tree.filter(t => t.type === 'blob' && t.path.startsWith(prefix))
+    const cleanSlug = sanitizeSlug(skillName)
+    const zip = new JSZip()
+    const folder = zip.folder(cleanSlug)!
+    await Promise.all(blobs.map(async f => {
+      const rel = f.path.slice(prefix.length)
+      try {
+        const r = await fetch(`https://raw.githubusercontent.com/${repoPath}/${lib.defaultBranch}/${f.path}`)
+        if (!r.ok) return
+        if (/\.(md|txt|json|ya?ml|py|js|ts|tsx|jsx|sh|html|css|toml|xml|csv|svg)$/i.test(rel)) {
+          folder.file(rel, await r.text())
+        } else {
+          folder.file(rel, await r.blob())
+        }
+      } catch { /* ignore */ }
+    }))
+    const blob = await zip.generateAsync({ type: 'blob' })
+    triggerDownload(blob, `${cleanSlug}.zip`)
+    setDownloadingId(null)
+  }
 
   const downloadSkillZip = async (slug: string, skillContent: string, promptContent: string, extraFiles: RepoFile[] = []) => {
     const cleanSlug = sanitizeSlug(slug)
@@ -382,6 +436,15 @@ export default function Home() {
       if (!data.success) return empty
       const gh = data.github
       const repoPath = repoUrl.match(/github\.com\/([^/]+\/[^/\s?#]+)/)?.[1]?.replace(/\.git$/, '')
+
+      // Detect skill library pattern (multiple skills under skills/)
+      if (repoPath) {
+        const cached = libraryMap[repoPath]
+        if (cached === undefined) {
+          const lib = await detectSkillLibrary(repoPath)
+          setLibraryMap(m => ({ ...m, [repoPath]: lib }))
+        }
+      }
 
       // Fetch all supporting files from repo tree
       let extraFiles: RepoFile[] = []
@@ -779,8 +842,41 @@ export default function Home() {
                       )}
                       <div className="github-actions">
                         <a href={gh.url} target="_blank" rel="noopener noreferrer" className="link-btn">View on GitHub →</a>
-                        <button onClick={() => downloadSkillFile(gh, analysis!, `scan-${i}`)} disabled={downloadingId === `scan-${i}`} className="download-btn">{downloadingId === `scan-${i}` ? 'Fetching…' : 'Download .skill ↓'}</button>
+                        {(() => {
+                          const lib = libraryMap[gh.fullName]
+                          const isLib = lib && lib !== 'loading'
+                          if (isLib) {
+                            return (
+                              <button
+                                onClick={() => setExpandedLib(s => { const n = new Set(s); if (n.has(gh.fullName)) n.delete(gh.fullName); else n.add(gh.fullName); return n })}
+                                className="download-btn"
+                              >
+                                {(lib as SkillLibrary).skills.length} skills inside {expandedLib.has(gh.fullName) ? '▲' : '▼'}
+                              </button>
+                            )
+                          }
+                          return <button onClick={() => downloadSkillFile(gh, analysis!, `scan-${i}`)} disabled={downloadingId === `scan-${i}`} className="download-btn">{downloadingId === `scan-${i}` ? 'Fetching…' : 'Download .skill ↓'}</button>
+                        })()}
                       </div>
+                      {(() => {
+                        const lib = libraryMap[gh.fullName]
+                        if (!lib || lib === 'loading' || !expandedLib.has(gh.fullName)) return null
+                        return (
+                          <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
+                            {(lib as SkillLibrary).skills.map(name => {
+                              const btnId = `lib-${gh.fullName}-${name}`
+                              return (
+                                <li key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
+                                  <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>◈ {name}</span>
+                                  <button onClick={() => downloadIndividualSkill(gh.fullName, name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
+                                    {downloadingId === btnId ? '…' : 'download ↓'}
+                                  </button>
+                                </li>
+                              )
+                            })}
+                          </ul>
+                        )
+                      })()}
                     </div>
                   ))}
                 </div>
