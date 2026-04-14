@@ -364,30 +364,10 @@ export default function Home() {
 
   const detectSkillLibrary = async (repoPath: string): Promise<SkillLibrary | null> => {
     try {
-      const repoRes = await fetch(`https://api.github.com/repos/${repoPath}`, { headers: { 'User-Agent': 'SkillScout/1.0' } })
-      if (!repoRes.ok) return null
-      const branch = (await repoRes.json()).default_branch || 'main'
-      const treeRes = await fetch(`https://api.github.com/repos/${repoPath}/git/trees/${branch}?recursive=1`, { headers: { 'User-Agent': 'SkillScout/1.0' } })
-      if (!treeRes.ok) return null
-      const treeData = await treeRes.json()
-      const tree: { path: string; type: string }[] = treeData.tree || []
-      // Match both skills/<name>/SKILL.md and <name>/SKILL.md
-      const nested = tree.filter(t => t.type === 'blob' && /^skills\/[^/]+\/SKILL\.md$/i.test(t.path))
-      const rootLevel = tree.filter(t => t.type === 'blob' && /^[^/]+\/SKILL\.md$/i.test(t.path))
-      const pattern = nested.length >= 2 ? nested : (rootLevel.length >= 2 ? rootLevel : null)
-      if (!pattern) return null
-      const seen = new Set<string>()
-      const skills: { name: string; prefix: string }[] = []
-      for (const p of pattern) {
-        const parts = p.path.split('/')
-        const name = parts[parts.length - 2]
-        const prefix = parts.slice(0, -1).join('/') + '/'
-        if (seen.has(name)) continue
-        seen.add(name)
-        skills.push({ name, prefix })
-      }
-      skills.sort((a, b) => a.name.localeCompare(b.name))
-      return { skills, tree, defaultBranch: branch }
+      const res = await fetch('/api/skill-library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ repoPath }) })
+      const data = await res.json()
+      if (!data.success) return null
+      return data.library
     } catch { return null }
   }
 
