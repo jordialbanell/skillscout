@@ -299,7 +299,7 @@ export default function Home() {
   const sanitizeSlug = (s: string) => s.replace(/[^a-z0-9-]/gi, '-').replace(/-{2,}/g, '-').replace(/^-|-$/g, '') || s
 
   interface RepoFile { path: string; content: string }
-  interface SkillLibrary { skills: string[]; tree: { path: string; type: string }[]; defaultBranch: string }
+  interface SkillLibrary { skills: { name: string; prefix: string }[]; tree: { path: string; type: string }[]; defaultBranch: string }
 
   const detectSkillLibrary = async (repoPath: string): Promise<SkillLibrary | null> => {
     try {
@@ -310,9 +310,22 @@ export default function Home() {
       if (!treeRes.ok) return null
       const treeData = await treeRes.json()
       const tree: { path: string; type: string }[] = treeData.tree || []
-      const skillPaths = tree.filter(t => t.type === 'blob' && /^skills\/[^/]+\/SKILL\.md$/i.test(t.path))
-      if (skillPaths.length < 2) return null
-      const skills = Array.from(new Set(skillPaths.map(t => t.path.split('/')[1]))).sort()
+      // Match both skills/<name>/SKILL.md and <name>/SKILL.md
+      const nested = tree.filter(t => t.type === 'blob' && /^skills\/[^/]+\/SKILL\.md$/i.test(t.path))
+      const rootLevel = tree.filter(t => t.type === 'blob' && /^[^/]+\/SKILL\.md$/i.test(t.path))
+      const pattern = nested.length >= 2 ? nested : (rootLevel.length >= 2 ? rootLevel : null)
+      if (!pattern) return null
+      const seen = new Set<string>()
+      const skills: { name: string; prefix: string }[] = []
+      for (const p of pattern) {
+        const parts = p.path.split('/')
+        const name = parts[parts.length - 2]
+        const prefix = parts.slice(0, -1).join('/') + '/'
+        if (seen.has(name)) continue
+        seen.add(name)
+        skills.push({ name, prefix })
+      }
+      skills.sort((a, b) => a.name.localeCompare(b.name))
       return { skills, tree, defaultBranch: branch }
     } catch { return null }
   }
@@ -321,7 +334,9 @@ export default function Home() {
     setDownloadingId(btnId)
     const lib = libraryMap[repoPath]
     if (!lib || lib === 'loading') { setDownloadingId(null); return }
-    const prefix = `skills/${skillName}/`
+    const entry = lib.skills.find(s => s.name === skillName)
+    if (!entry) { setDownloadingId(null); return }
+    const prefix = entry.prefix
     const blobs = lib.tree.filter(t => t.type === 'blob' && t.path.startsWith(prefix))
     const cleanSlug = sanitizeSlug(skillName)
     const zip = new JSZip()
@@ -502,34 +517,6 @@ export default function Home() {
     const prompt = `I've just installed the ${scan.skill_name} skill. Here's what it does:\n\n${scan.summary}\n\nKey capabilities:\n${(scan.key_steps || []).map((s: string, i: number) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
     await downloadSkillZip(slug, skillContent, prompt, extraFiles)
     if (btnId) setDownloadingId(null)
-  }
-
-  const downloadGroupSkill = async (group: SkillGroup, btnId: string) => {
-    setDownloadingId(btnId)
-    const slug = group.skillName.toLowerCase().replace(/\s+/g, '-')
-    const yamlName = sanitizeYamlName(slug)
-    const allSteps = new Set<string>()
-    group.scans.forEach(s => (s.key_steps || []).forEach((step: string) => allSteps.add(step)))
-    const steps = Array.from(allSteps)
-    const repos = group.repos.map(r => r.repo).sort((a, b) => b.trustScore - a.trustScore)
-    // Fetch content from the highest-trust repo
-    let fetchedBody = ''
-    let extraFiles: RepoFile[] = []
-    if (repos.length > 0) {
-      const fetched = await fetchRepoContent(repos[0].url)
-      if (fetched.skillFileContent) fetchedBody = fetched.skillFileContent
-      else if (fetched.body) fetchedBody = fetched.body
-      extraFiles = fetched.extraFiles
-    }
-    const reposSection = repos.length > 0
-      ? `\n## Recommended Repos\n${repos.map(r => `- [${r.fullName}](${r.url}) — trust score: ${r.trustScore}`).join('\n')}\n`
-      : ''
-    const sourcesSection = `\n## Sources\n${group.scans.map(s => `- ${s.url}`).join('\n')}\n`
-    const mainBody = fetchedBody || `${group.summary}\n\n## Key Steps\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
-    const skillContent = `---\nname: ${yamlName}\ndescription: Use this skill when working on ${group.category} tasks with Claude.\n---\n\n# ${group.skillName}\n\n${mainBody}\n${reposSection}${sourcesSection}`
-    const prompt = `I've just installed the ${group.skillName} skill. Here's what it does:\n\n${group.summary}\n\nKey capabilities:\n${steps.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\nPlease confirm you have access to this skill and suggest 3 ways I could use it right now based on what I'm working on.`
-    await downloadSkillZip(slug, skillContent, prompt, extraFiles)
-    setDownloadingId(null)
   }
 
   const getOverlaps = () => {
@@ -863,12 +850,12 @@ export default function Home() {
                         if (!lib || lib === 'loading' || !expandedLib.has(gh.fullName)) return null
                         return (
                           <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
-                            {(lib as SkillLibrary).skills.map(name => {
-                              const btnId = `lib-${gh.fullName}-${name}`
+                            {(lib as SkillLibrary).skills.map(s => {
+                              const btnId = `lib-${gh.fullName}-${s.name}`
                               return (
-                                <li key={name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
-                                  <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>◈ {name}</span>
-                                  <button onClick={() => downloadIndividualSkill(gh.fullName, name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
+                                <li key={s.name} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '4px 0' }}>
+                                  <span style={{ fontFamily: 'monospace', fontSize: '13px' }}>◈ {s.name}</span>
+                                  <button onClick={() => downloadIndividualSkill(gh.fullName, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
                                     {downloadingId === btnId ? '…' : 'download ↓'}
                                   </button>
                                 </li>
@@ -942,8 +929,6 @@ export default function Home() {
                     ))}
                   </div>
                 )}
-                <button onClick={() => downloadGroupSkill(group, `group-${group.key}`)} disabled={downloadingId === `group-${group.key}`} className="download-btn" style={{marginTop: '8px', fontSize: '12px'}}>{downloadingId === `group-${group.key}` ? 'Fetching repo content…' : 'Download combined .skill ↓'}</button>
-
                 <button className="sources-toggle" onClick={() => toggleGroup(group.key)}>
                   {expandedGroups.has(group.key) ? '▾' : '▸'} Sources ({group.scans.length})
                 </button>
