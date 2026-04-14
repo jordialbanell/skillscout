@@ -165,21 +165,22 @@ export default function Home() {
           <button
             onClick={() => fetchRecommendations(libKey, allNames)}
             disabled={rec === 'loading'}
-            className="download-btn-secondary"
+            className="scan-btn"
+            style={{ fontSize: '13px', padding: '6px 14px' }}
           >
-            {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : '✨ Get recommendations'}
+            {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : 'Get recommendations'}
           </button>
           <button
             onClick={() => downloadSelectedSkills(libKey, repoPath, lib, btnId)}
             disabled={selected.size === 0 || downloadingId === btnId}
-            className="download-btn"
+            className="scan-btn"
+            style={{ fontSize: '13px', padding: '6px 14px' }}
           >
             {downloadingId === btnId ? 'Zipping…' : `Download selected (${selected.size}) ↓`}
           </button>
           <button
             onClick={() => setAllSelected(libKey, allSelected ? [] : allNames)}
             className="link-btn"
-            style={{ fontSize: '12px' }}
           >
             {allSelected ? 'Deselect all' : 'Select all'}
           </button>
@@ -198,7 +199,7 @@ export default function Home() {
                 style={{ marginTop: '3px', cursor: 'pointer' }}
               />
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
-                <span style={{ fontFamily: 'monospace', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
+                <span className="batch-repo-name" style={{ display: 'inline-flex', alignItems: 'center', gap: '8px', whiteSpace: 'normal' }}>
                   <span>{s.name}</span>
                   {status === 'recommended' && (
                     <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', fontSize: '11px', color: '#15803d', background: '#dcfce7', padding: '1px 6px', borderRadius: '10px', fontFamily: 'inherit' }}>
