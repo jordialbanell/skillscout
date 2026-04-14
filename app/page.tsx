@@ -449,23 +449,28 @@ export default function Home() {
     if (!entry) { setDownloadingId(null); return }
     const prefix = entry.prefix
     const blobs = lib.tree.filter(t => t.type === 'blob' && t.path.startsWith(prefix))
-    const cleanSlug = sanitizeSlug(skillName)
+    const [owner, repo] = repoPath.split('/')
+    const uniqueName = sanitizeSlug(`${owner}-${repo}-${skillName}`)
     const zip = new JSZip()
-    const folder = zip.folder(cleanSlug)!
+    const folder = zip.folder(uniqueName)!
     await Promise.all(blobs.map(async f => {
       const rel = f.path.slice(prefix.length)
       try {
         const r = await fetch(`https://raw.githubusercontent.com/${repoPath}/${lib.defaultBranch}/${f.path}`)
         if (!r.ok) return
         if (/\.(md|txt|json|ya?ml|py|js|ts|tsx|jsx|sh|html|css|toml|xml|csv|svg)$/i.test(rel)) {
-          folder.file(rel, await r.text())
+          let text = await r.text()
+          if (/^SKILL\.md$/i.test(rel)) {
+            text = text.replace(/^(\s*name\s*:\s*).*$/m, `$1${uniqueName}`)
+          }
+          folder.file(rel, text)
         } else {
           folder.file(rel, await r.blob())
         }
       } catch { /* ignore */ }
     }))
     const blob = await zip.generateAsync({ type: 'blob' })
-    triggerDownload(blob, `${cleanSlug}.zip`)
+    triggerDownload(blob, `${uniqueName}.zip`)
     setDownloadingId(null)
   }
 
