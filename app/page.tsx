@@ -105,6 +105,46 @@ export default function Home() {
   const [expandedLib, setExpandedLib] = useState<Set<string>>(new Set())
   interface Recommendation { recommended: string[]; skip: string[]; reasoning: Record<string, string> }
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation | 'loading'>>({})
+  const [selectedSkills, setSelectedSkills] = useState<Record<string, Set<string>>>({})
+
+  const toggleSkillSelection = (libKey: string, name: string) => {
+    setSelectedSkills(prev => {
+      const cur = new Set(prev[libKey] || [])
+      if (cur.has(name)) cur.delete(name); else cur.add(name)
+      return { ...prev, [libKey]: cur }
+    })
+  }
+
+  const setAllSelected = (libKey: string, names: string[]) => {
+    setSelectedSkills(prev => ({ ...prev, [libKey]: new Set(names) }))
+  }
+
+  const downloadSelectedSkills = async (libKey: string, repoPath: string, lib: SkillLibrary, btnId: string) => {
+    const selected = selectedSkills[libKey]
+    if (!selected || selected.size === 0) return
+    setDownloadingId(btnId)
+    const zip = new JSZip()
+    for (const entry of lib.skills) {
+      if (!selected.has(entry.name)) continue
+      const folder = zip.folder(sanitizeSlug(entry.name))!
+      const blobs = lib.tree.filter(t => t.type === 'blob' && t.path.startsWith(entry.prefix))
+      await Promise.all(blobs.map(async f => {
+        const rel = f.path.slice(entry.prefix.length)
+        try {
+          const r = await fetch(`https://raw.githubusercontent.com/${repoPath}/${lib.defaultBranch}/${f.path}`)
+          if (!r.ok) return
+          if (/\.(md|txt|json|ya?ml|py|js|ts|tsx|jsx|sh|html|css|toml|xml|csv|svg)$/i.test(rel)) {
+            folder.file(rel, await r.text())
+          } else {
+            folder.file(rel, await r.blob())
+          }
+        } catch { /* ignore */ }
+      }))
+    }
+    const blob = await zip.generateAsync({ type: 'blob' })
+    triggerDownload(blob, `selected-skills.zip`)
+    setDownloadingId(null)
+  }
 
   const renderSkillLibraryList = (libKey: string, lib: SkillLibrary, repoPath: string) => {
     const rec = recommendations[libKey]
@@ -115,38 +155,48 @@ export default function Home() {
       if (recObj.skip.includes(name)) return 'skip'
       return null
     }
-    const downloadAllRecommended = async () => {
-      if (!recObj) return
-      for (let i = 0; i < recObj.recommended.length; i++) {
-        const name = recObj.recommended[i]
-        if (!lib.skills.find(s => s.name === name)) continue
-        await downloadIndividualSkill(repoPath, name, `lib-${libKey}-${name}`)
-        if (i < recObj.recommended.length - 1) await new Promise(r => setTimeout(r, 500))
-      }
-    }
+    const selected = selectedSkills[libKey] || new Set<string>()
+    const allNames = lib.skills.map(s => s.name)
+    const allSelected = allNames.length > 0 && allNames.every(n => selected.has(n))
+    const btnId = `lib-selected-${libKey}`
     return (
       <ul className="skill-library-list" style={{ listStyle: 'none', padding: '8px 0 0', margin: 0, borderTop: '1px solid var(--border, #eee)', marginTop: '8px' }}>
-        <li style={{ padding: '4px 0 8px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+        <li style={{ padding: '4px 0 8px', display: 'flex', gap: '8px', flexWrap: 'wrap', alignItems: 'center' }}>
           <button
-            onClick={() => fetchRecommendations(libKey, lib.skills.map(s => s.name))}
+            onClick={() => fetchRecommendations(libKey, allNames)}
             disabled={rec === 'loading'}
             className="download-btn-secondary"
           >
             {rec === 'loading' ? 'Getting recommendations…' : recObj ? 'Refresh recommendations' : '✨ Get recommendations'}
           </button>
-          {recObj && recObj.recommended.length > 0 && (
-            <button onClick={downloadAllRecommended} className="download-btn">
-              Download recommended ({recObj.recommended.length}) ↓
-            </button>
-          )}
+          <button
+            onClick={() => downloadSelectedSkills(libKey, repoPath, lib, btnId)}
+            disabled={selected.size === 0 || downloadingId === btnId}
+            className="download-btn"
+          >
+            {downloadingId === btnId ? 'Zipping…' : `Download selected (${selected.size}) ↓`}
+          </button>
+          <button
+            onClick={() => setAllSelected(libKey, allSelected ? [] : allNames)}
+            className="link-btn"
+            style={{ fontSize: '12px' }}
+          >
+            {allSelected ? 'Deselect all' : 'Select all'}
+          </button>
         </li>
         {lib.skills.map(s => {
-          const btnId = `lib-${libKey}-${s.name}`
           const status = statusFor(s.name)
           const reason = recObj?.reasoning[s.name]
-          const rowStyle: React.CSSProperties = { display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '12px', padding: '6px 0', opacity: status === 'skip' ? 0.5 : 1 }
+          const isChecked = selected.has(s.name)
+          const rowStyle: React.CSSProperties = { display: 'flex', alignItems: 'flex-start', gap: '10px', padding: '6px 0', opacity: status === 'skip' && !isChecked ? 0.5 : 1 }
           return (
             <li key={s.name} style={rowStyle}>
+              <input
+                type="checkbox"
+                checked={isChecked}
+                onChange={() => toggleSkillSelection(libKey, s.name)}
+                style={{ marginTop: '3px', cursor: 'pointer' }}
+              />
               <div style={{ display: 'flex', flexDirection: 'column', minWidth: 0, flex: 1 }}>
                 <span style={{ fontFamily: 'monospace', fontSize: '13px', display: 'inline-flex', alignItems: 'center', gap: '8px' }}>
                   <span>{s.name}</span>
@@ -159,9 +209,6 @@ export default function Home() {
                 </span>
                 {reason && <span style={{ fontSize: '11px', color: 'var(--text-muted, #888)', marginTop: '3px', lineHeight: 1.4 }}>{reason}</span>}
               </div>
-              <button onClick={() => downloadIndividualSkill(repoPath, s.name, btnId)} disabled={downloadingId === btnId} className="download-btn-secondary">
-                {downloadingId === btnId ? '…' : 'download ↓'}
-              </button>
             </li>
           )
         })}
@@ -174,7 +221,10 @@ export default function Home() {
     try {
       const res = await fetch('/api/recommend-skills', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ skills }) })
       const data = await res.json()
-      if (data.success) setRecommendations(r => ({ ...r, [libKey]: { recommended: data.recommended || [], skip: data.skip || [], reasoning: data.reasoning || {} } }))
+      if (data.success) {
+        setRecommendations(r => ({ ...r, [libKey]: { recommended: data.recommended || [], skip: data.skip || [], reasoning: data.reasoning || {} } }))
+        setSelectedSkills(prev => ({ ...prev, [libKey]: new Set(data.recommended || []) }))
+      }
       else setRecommendations(r => { const { [libKey]: _, ...rest } = r; return rest })
     } catch {
       setRecommendations(r => { const { [libKey]: _, ...rest } = r; return rest })
